@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main, master, staging]
+    branches: [main, staging]
     tags: ["v*"]
   pull_request:
-    branches: [main, master]
+    branches: [main]
 
 # Cancel in-progress runs for branch/PR refs; let tag builds always complete.
 concurrency:
