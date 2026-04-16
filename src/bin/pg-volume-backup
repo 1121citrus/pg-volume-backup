@@ -221,40 +221,35 @@ for i in "${!tar_files[@]}"; do
         bzip2|bz2)
             info "compress: bzip2"
             if ! is_true "${DRYRUN}"; then
-                bzip2 --keep "${tar_file}"
-                rm -f "${tar_file}"
+                bzip2 "${tar_file}"
                 archive="${tar_file}.bz2"
             fi
             ;;
         gzip|gz)
             info "compress: gzip"
             if ! is_true "${DRYRUN}"; then
-                gzip --keep "${tar_file}"
-                rm -f "${tar_file}"
+                gzip "${tar_file}"
                 archive="${tar_file}.gz"
             fi
             ;;
         xz)
             info "compress: xz"
             if ! is_true "${DRYRUN}"; then
-                xz --keep "${tar_file}"
-                rm -f "${tar_file}"
+                xz "${tar_file}"
                 archive="${tar_file}.xz"
             fi
             ;;
         pigz)
             info "compress: pigz"
             if ! is_true "${DRYRUN}"; then
-                pigz --keep "${tar_file}"
-                rm -f "${tar_file}"
+                pigz "${tar_file}"
                 archive="${tar_file}.gz"
             fi
             ;;
         lzop)
             info "compress: lzop"
             if ! is_true "${DRYRUN}"; then
-                lzop --keep --output="${tar_file}.lzo" "${tar_file}"
-                rm -f "${tar_file}"
+                lzop "${tar_file}"
                 archive="${tar_file}.lzo"
             fi
             ;;
