@@ -39,7 +39,9 @@ Environment variables:
                               (default: /run/secrets/aws-credentials)
   AWS_DRYRUN                  Pass --dryrun to AWS CLI (default: false)
   BACKUP_HOSTNAME       Hostname for archive names (default: hostname)
+  BACKUP_ROOT           Volume discovery root (default: /backup)
   COMPRESSION           bzip2, gzip, xz, lzop, pigz, none (default: none)
+  DEBUG                 Enable set -x trace output (default: false)
   GPG_PASSPHRASE        GPG passphrase (prefer GPG_PASSPHRASE_FILE)
   GPG_PASSPHRASE_FILE   Path to GPG passphrase file
   GPG_CIPHER_ALGO       GPG cipher algorithm (default: aes256)
