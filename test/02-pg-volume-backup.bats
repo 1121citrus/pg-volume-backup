@@ -129,12 +129,19 @@ teardown() {
 }
 
 # ── Dry-run ───────────────────────────────────────────────────────────────────
+# --dry-run is a pg-volume-backup argument, not a docker flag, so these tests
+# call docker run directly rather than using run_pg_volume_backup (which
+# places extra args before the image reference).
 
 @test "--dry-run exits 0" {
-    run run_pg_volume_backup \
+    # shellcheck disable=SC2086
+    run docker run -i --rm ${DOCKER_RUN_ARGS:-} \
+        -e "PATH=/test/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        -e AWS_S3_BUCKET_NAME=test-bucket \
         -e BACKUP_ROOT=/backup \
+        -v "${WHEREAMI}/bin:/test/bin:ro" \
         -v "${TEST_TMPDIR}:/backup:ro" \
-        --dry-run
+        "${IMAGE}" /usr/local/bin/pg-volume-backup --dry-run
     [ "$status" -eq 0 ]
 }
 
@@ -142,11 +149,15 @@ teardown() {
     local outdir
     outdir=$(mktemp -d)
     chmod o+rwx "${outdir}"
-    run_pg_volume_backup \
+    # shellcheck disable=SC2086
+    docker run -i --rm ${DOCKER_RUN_ARGS:-} \
+        -e "PATH=/test/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        -e AWS_S3_BUCKET_NAME=test-bucket \
         -e BACKUP_ROOT=/backup \
+        -v "${WHEREAMI}/bin:/test/bin:ro" \
         -v "${TEST_TMPDIR}:/backup:ro" \
         -v "${outdir}:/output" \
-        --dry-run > /dev/null
+        "${IMAGE}" /usr/local/bin/pg-volume-backup --dry-run > /dev/null
     local found
     found=$(find "${outdir}" -type f | head -1)
     rm -rf "${outdir}"
@@ -156,10 +167,14 @@ teardown() {
 
 @test "--dry-run logs dry-run mode message" {
     local output
-    output=$(run_pg_volume_backup \
+    # shellcheck disable=SC2086
+    output=$(docker run -i --rm ${DOCKER_RUN_ARGS:-} \
+        -e "PATH=/test/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        -e AWS_S3_BUCKET_NAME=test-bucket \
         -e BACKUP_ROOT=/backup \
+        -v "${WHEREAMI}/bin:/test/bin:ro" \
         -v "${TEST_TMPDIR}:/backup:ro" \
-        --dry-run 2>&1)
+        "${IMAGE}" /usr/local/bin/pg-volume-backup --dry-run 2>&1)
     echo "output: ${output}"
     [[ "${output}" == *"dry-run"* ]]
 }

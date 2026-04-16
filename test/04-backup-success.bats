@@ -107,6 +107,19 @@ teardown() {
     [[ "${contents}" =~ ^[0-9a-f]{64}[[:space:]] ]]
 }
 
+@test "SHA256 companion verifies against the archive" {
+    run_backup -e COMPRESSION=none > /dev/null
+    local sha_file tarfile outdir
+    outdir="${TEST_TMPDIR}/output"
+    sha_file=$(find "${outdir}" -name "*.tar.sha256" | head -1)
+    tarfile=$(find "${outdir}" -name "*.tar" | head -1)
+    echo "sha_file: ${sha_file}"
+    echo "tarfile: ${tarfile}"
+    # sha256sum -c expects the hash file and the referenced archive
+    # to be in the same directory.  Use -c (BusyBox compatible).
+    (cd "${outdir}" && sha256sum -c "$(basename "${sha_file}")")
+}
+
 # ── Compression ───────────────────────────────────────────────────────────────
 
 @test "bzip2 compression produces .tar.bz2 archive" {
