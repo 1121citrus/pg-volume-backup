@@ -5,6 +5,11 @@
 # Copyright (C) 2026 James Hanlon [mailto:jim@hanlonsoftware.com]
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+ENV="${ENV:-${HOME:-/root}/.env}"
+# shellcheck disable=SC1090
+[[ -r "${ENV}" ]] && source "${ENV}"
+COMMAND="${COMMAND:-/usr/local/bin/backup}"
+
 crond_running=false
 if pidof crond > /dev/null 2>&1; then
     crond_running=true
@@ -18,8 +23,8 @@ if ! "${crond_running}"; then
 fi
 
 crontab_path="/var/spool/cron/crontabs/$(id -un)"
-if ! grep -q '/backup' "${crontab_path}" 2>/dev/null; then
-    echo "healthcheck: crontab at ${crontab_path} missing /backup entry" >&2
+if ! grep -qF "${COMMAND}" "${crontab_path}" 2>/dev/null; then
+    echo "healthcheck: crontab at ${crontab_path} missing ${COMMAND} entry" >&2
     exit 1
 fi
 
