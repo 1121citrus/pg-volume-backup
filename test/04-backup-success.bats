@@ -167,6 +167,41 @@ teardown() {
     [ "$status" -ne 0 ]
 }
 
+# ── Multi-volume ──────────────────────────────────────────────────────────────
+
+@test "multi-volume backup produces an archive for each volume" {
+    mkdir -p "${TEST_TMPDIR}/backup/vol2"
+    echo "second content" > "${TEST_TMPDIR}/backup/vol2/data2.txt"
+    run_backup -e COMPRESSION=none > /dev/null
+    local count
+    count=$(find "${TEST_TMPDIR}/output" -name "*.tar" | wc -l)
+    echo "archive count: ${count}"
+    [ "${count}" -eq 2 ]
+}
+
+@test "multi-volume backup produces a SHA256 companion for each volume" {
+    mkdir -p "${TEST_TMPDIR}/backup/vol2"
+    echo "second content" > "${TEST_TMPDIR}/backup/vol2/data2.txt"
+    run_backup -e COMPRESSION=none > /dev/null
+    local count
+    count=$(find "${TEST_TMPDIR}/output" -name "*.tar.sha256" | wc -l)
+    echo "sha256 count: ${count}"
+    [ "${count}" -eq 2 ]
+}
+
+@test "multi-volume backup archive names include each volume name" {
+    mkdir -p "${TEST_TMPDIR}/backup/vol2"
+    echo "second content" > "${TEST_TMPDIR}/backup/vol2/data2.txt"
+    run_backup -e COMPRESSION=none > /dev/null
+    local found_testvol found_vol2
+    found_testvol=$(find "${TEST_TMPDIR}/output" -name "*-testvol-backup*" | head -1)
+    found_vol2=$(find "${TEST_TMPDIR}/output" -name "*-vol2-backup*" | head -1)
+    echo "found_testvol: ${found_testvol}"
+    echo "found_vol2: ${found_vol2}"
+    [[ -n "${found_testvol}" ]]
+    [[ -n "${found_vol2}" ]]
+}
+
 # ── Archive integrity ─────────────────────────────────────────────────────────
 
 @test "no-compression archive is a valid tar file" {
