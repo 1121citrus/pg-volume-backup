@@ -17,6 +17,6 @@ whereami=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
         -e "IMAGE=${IMAGE:-}" \
         --workdir "${PWD}" \
         --entrypoint sh \
-        bats/bats:1.13.0 \
+        bats/bats:1.13.0@sha256:6e4b9369468b7f3fd8f402ac6cc8ea7b2e4903eae28d08785f31a0245eb51a44 \
         -c "apk add --quiet --no-cache docker-cli gnupg >/dev/null 2>&1 && bats test"
 )
