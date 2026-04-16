@@ -405,12 +405,22 @@ if [[ "${LINT}" == "true" ]]; then
     (cd "${script_dir}" && run docker run --rm \
         -v "${script_dir}:/mnt" \
         "${SHELLCHECK_IMAGE}:${SHELLCHECK_TAG}" \
+        -S warning \
         -x \
+        build \
         src/common-functions \
         src/bin/backup \
         src/bin/healthcheck \
         src/bin/pg-volume-backup \
         src/bin/startup \
+        test/00-coverage.bats \
+        test/01-build.bats \
+        test/02-pg-volume-backup.bats \
+        test/03-backup-required-vars.bats \
+        test/04-backup-success.bats \
+        test/05-backup-encryption.bats \
+        test/06-healthcheck.bats \
+        test/07-image-metadata.bats \
         test/run-all \
         test/staging \
         test/bin/aws)
