@@ -7,7 +7,7 @@ publication for pg-volume-backup.
 
 | Stage | Trigger | Purpose |
 | ----- | ------- | ------- |
-| **Lint** | All pushes, PRs to main/master, tags | Validate Dockerfile and shell scripts |
+| **Lint** | All pushes, PRs to dev/staging/main, tags | Validate Dockerfile and shell scripts |
 | **Build** | After lint | Build image and share as artifact |
 | **Test** | After build (parallel with scan) | Run integration test suite |
 | **Scan** | After build (parallel with test) | Trivy image scan — blocks push on fixable CVEs |
@@ -27,8 +27,14 @@ The Test job is defined inline because it is specific to this repo.
 
 ### Trigger events
 
-- **Push:** `main`, `master`, `staging` branches and `v*` version tags
-- **Pull requests:** To `main` or `master` branches
+- **Push:** `main`, `dev`, `staging` branches and `v*` version tags
+- **Pull requests:** To `dev`, `staging`, or `main` branches
+
+### Branch strategy
+
+- `dev` is the developer validation branch used to exercise CI early.
+- `staging` is the integration branch used before release promotion.
+- `main` is the release branch.
 
 ### Concurrency
 

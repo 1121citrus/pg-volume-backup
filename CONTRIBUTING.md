@@ -48,7 +48,8 @@ The `./build` stage runs these automatically.
 1. Create a branch from `dev`
 2. Make your changes
 3. Run `./build --no-scan` to lint, build, and test
-4. Submit a pull request to the `dev` branch
+4. Submit a pull request to the `dev` branch to exercise CI
+5. After `dev` is validated, submit a pull request from `dev` to `staging`
 
 ## Release process
 
