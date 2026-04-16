@@ -21,7 +21,7 @@ interaction is replaced by the stub at `test/bin/aws`.
 
 | Script | What it tests |
 | --- | --- |
-| `01-build.bats` | `build` option parsing for `--advice` alias and `--cache`; `staging --help` coverage for `--scan`/`--advise` |
+| `01-build.bats` | `build` option parsing for `--advice` alias and `--cache`; `staging --help` coverage for `--scan` and `--aws-credentials` |
 | `02-pg-volume-backup.bats` | CLI option parsing (`--help`, `--version`, unknown option); required-variable validation (`AWS_S3_BUCKET_NAME`, `DB_HOST`/`DB_NAME`/`DB_USER` when `DB_VOLUME` is set, no volumes under `BACKUP_ROOT`) |
 | `03-backup-required-vars.bats` | `backup` script rejects missing `AWS_S3_BUCKET_NAME` and missing DB vars when `DB_VOLUME` is set |
 | `04-backup-success.bats` | Archive naming (volume name, hostname, timestamp pattern); SHA-256 companion file (presence, `.tar.sha256` extension, valid hash line); all five compression modes; invalid compression exits non-zero; archive is a valid tar containing the backed-up file |
@@ -75,15 +75,15 @@ Run it manually before tagging a release.
 | `AWS_SECRET_ACCESS_KEY` | Service tests | AWS secret key (required with `AWS_ACCESS_KEY_ID`) |
 | `AWS_DRYRUN` | Service tests | Set to `false` for real S3 writes; defaults to `true` |
 | `STAGING_SCAN` | Scanner phase | `true`/`false`; controls Trivy scan (default: `true`) |
-| `STAGING_ADVISE` | Scanner phase | `true`/`false`; controls Grype advisement (default: `true`) |
 
-### Staging scanner options
+### Staging scanner option
 
-`test/staging` supports the same scanner controls as `build`:
+`test/staging` supports Trivy scan toggling only:
 
 - `--scan` / `--no-scan`
-- `--advise [grype,scout,dive,all]`
-- `--no-advise`
+
+Advisory tooling (`--advise`, `--no-advise`) is implemented by `build`,
+not by `test/staging`.
 
 ### Running
 
