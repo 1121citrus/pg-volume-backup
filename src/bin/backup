@@ -16,7 +16,7 @@ ENV="${ENV:-${HOME:-/root}/.env}"
 set -o errexit -o errtrace -o nounset -o pipefail
 # shellcheck disable=SC1090
 [[ -r "${ENV}" ]] && source "${ENV}"
-is_true "${DEBUG:=false}" && set -o xtrace -o verbose
+is_true "${DEBUG:-false}" && set -o xtrace -o verbose
 
 export AWS_CONFIG_FILE="${AWS_CONFIG_FILE:=/run/secrets/aws-config}"
 export AWS_SHARED_CREDENTIALS_FILE="${AWS_SHARED_CREDENTIALS_FILE:=/run/secrets/aws-credentials}"

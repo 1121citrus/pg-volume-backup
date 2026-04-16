@@ -16,7 +16,7 @@ ENV="${ENV:-${HOME:-/root}/.env}"
 set -o errexit -o errtrace -o nounset -o pipefail
 # shellcheck disable=SC1090
 [[ -r "${ENV}" ]] && source "${ENV}"
-is_true "${DEBUG:=false}" && set -o xtrace -o verbose
+is_true "${DEBUG:-false}" && set -o xtrace -o verbose
 
 VERSION_FILE=/usr/local/share/pg-volume-backup/version
 version=$(cat "${VERSION_FILE}" 2>/dev/null || echo "dev")
