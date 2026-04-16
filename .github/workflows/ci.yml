@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, staging]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+
+# Cancel in-progress runs for branch/PR refs; let tag builds always complete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+# Minimal permissions by default; individual jobs add only what they need.
+permissions:
+  contents: read
+
+env:
+  IMAGE: 1121citrus/pg-volume-backup
+
+jobs:
+  # ── Stage 1: Lint ──────────────────────────────────────────────────────────
+  lint:
+    uses: 1121citrus/shared-github-workflows/.github/workflows/lint.yml@main
+
+  # ── Stage 2: Build ─────────────────────────────────────────────────────────
+  build:
+    needs: lint
+    uses: 1121citrus/shared-github-workflows/.github/workflows/build.yml@main
+    with:
+      image: 1121citrus/pg-volume-backup
+
+  # ── Stage 3: Test ──────────────────────────────────────────────────────────
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: Load image
+        run: gunzip -c /tmp/image.tar.gz | docker load
+
+      - name: Run test suite
+        # Run inside the same bats/bats:1.13.0 Alpine container used locally so
+        # test behaviour is identical in CI and on developer machines.  The
+        # Docker socket is mounted so tests can invoke docker commands, and
+        # IMAGE is set to the locally-loaded :latest tag.
+        run: |
+          docker run --rm -i \
+            -v "$PWD:$PWD" \
+            -v /tmp:/tmp \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e "IMAGE=$IMAGE:latest" \
+            --workdir "$PWD" \
+            --entrypoint sh \
+            bats/bats:1.13.0 \
+            -c "apk add --quiet --no-cache docker-cli gnupg >/dev/null 2>&1 && bats test"
+
+  # ── Stage 4: Security scan ─────────────────────────────────────────────────
+  scan:
+    needs: build
+    uses: 1121citrus/shared-github-workflows/.github/workflows/scan.yml@main
+    with:
+      image: 1121citrus/pg-volume-backup
+
+  # ── Stage 5: Push to Docker Hub ────────────────────────────────────────────
+  push:
+    needs: [test, scan]
+    if: >
+      github.event_name == 'push' && (
+        startsWith(github.ref, 'refs/tags/v') ||
+        github.ref == 'refs/heads/staging'
+      )
+    uses: 1121citrus/shared-github-workflows/.github/workflows/push.yml@main
+    with:
+      image: 1121citrus/pg-volume-backup
+    secrets: inherit

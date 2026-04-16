@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+# aws — test stub replacing the AWS CLI.
+#
+# If /output is mounted, copies the uploaded file there so tests can inspect
+# it.  Otherwise no-ops successfully.
+#
+# Copyright (C) 2026 James Hanlon [mailto:jim@hanlonsoftware.com]
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# Walk the argument list and capture the source path for s3 mv/cp commands.
+src=""
+while [[ $# -gt 0 ]]; do
+    case "${1}" in
+        s3)
+            shift
+            case "${1:-}" in
+                mv|cp)
+                    shift
+                    src="${1:-}"
+                    ;;
+            esac
+            ;;
+    esac
+    shift
+done
+
+if [[ -d /output && -n "${src}" && -f "${src}" ]]; then
+    cp "${src}" /output/
+fi
+
+exit 0

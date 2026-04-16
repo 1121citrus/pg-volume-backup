@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+
+# startup — container entrypoint for pg-volume-backup service mode.
+#
+# Writes runtime configuration to ~/.env, installs a crontab entry,
+# and runs crond in the foreground.
+#
+# Copyright (C) 2026 James Hanlon [mailto:jim@hanlonsoftware.com]
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+bindir=$(readlink -f "$(dirname "${0}")")
+export PATH="${bindir}:${PATH}"
+
+# shellcheck disable=SC1091
+source /usr/local/include/bash/common-functions
+
+set -o errexit -o errtrace -o nounset -o pipefail
+if is_true "${DEBUG:-false}"; then set -o xtrace -o verbose; fi
+
+ENV="${ENV:-${HOME:-/root}/.env}"
+# shellcheck disable=SC1090
+[[ -r "${ENV}" ]] && source "${ENV}"
+
+# Helper: quote values that contain single quotes for the env file.
+__quote() { printf '%s' "${1//\'/\'\"\'\"\'}"; }
+
+install -m 0600 /dev/null "${ENV}"
+cat <<EOF >"${ENV}"
+export AWS_CONFIG_FILE='$(__quote "${AWS_CONFIG_FILE:-/run/secrets/aws-config}")'
+export AWS_SHARED_CREDENTIALS_FILE='$(__quote "${AWS_SHARED_CREDENTIALS_FILE:-/run/secrets/aws-credentials}")'
+export AWS_DRYRUN='$(__quote "${AWS_DRYRUN:-false}")'
+export AWS_S3_BUCKET_NAME='$(__quote "${AWS_S3_BUCKET_NAME:-}")'
+export BACKUP_HOSTNAME='$(__quote "${BACKUP_HOSTNAME:-}")'
+export COMPRESSION='$(__quote "${COMPRESSION:-none}")'
+export CRON_EXPRESSION='$(__quote "${CRON_EXPRESSION:-@daily}")'
+export DB_FORMAT='$(__quote "${DB_FORMAT:-plain}")'
+export DB_HOST='$(__quote "${DB_HOST:-}")'
+export DB_NAME='$(__quote "${DB_NAME:-}")'
+export DB_PASSWORD='$(__quote "${DB_PASSWORD:-}")'
+export DB_PASSWORD_FILE='$(__quote "${DB_PASSWORD_FILE:-/run/secrets/db-password}")'
+export DB_PORT='$(__quote "${DB_PORT:-5432}")'
+export DB_USER='$(__quote "${DB_USER:-}")'
+export DB_VOLUME='$(__quote "${DB_VOLUME:-}")'
+export DEBUG='$(__quote "${DEBUG:-false}")'
+export GPG_CIPHER_ALGO='$(__quote "${GPG_CIPHER_ALGO:-aes256}")'
+export GPG_PASSPHRASE='$(__quote "${GPG_PASSPHRASE:-}")'
+export GPG_PASSPHRASE_FILE='$(__quote "${GPG_PASSPHRASE_FILE:-/run/secrets/gpg-passphrase}")'
+export TZ='$(__quote "${TZ:-UTC}")'
+EOF
+
+clean-credentials() {
+    sed -E 's/(DB_PASSWORD|GPG_PASSPHRASE)='"'"'.*'"'"'$/\1='"'"'**REDACTED**'"'"'/'
+}
+info "create env file ${ENV}"
+clean-credentials < "${ENV}" | info
+# shellcheck disable=SC1090
+source "${ENV}"
+
+COMMAND="${COMMAND:-/usr/local/bin/backup}"
+info "installing cron.d entry: ${COMMAND}"
+_crontab="/var/spool/cron/crontabs/$(id -un)"
+printf '%s\n' "${CRON_EXPRESSION} ${COMMAND} 2>&1" > "${_crontab}"
+chmod -c 0600 "${_crontab}" | info
+info "crontab: $(cat "${_crontab}")"
+
+info "handing the reins over to cron daemon"
+exec crond -l 2 -f

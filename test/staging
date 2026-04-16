@@ -1,0 +1,641 @@
+#!/usr/bin/env bash
+
+# test/staging — functional tests for pg-volume-backup against live AWS.
+#
+# Copyright (C) 2026 James Hanlon [mailto:jim@hanlonsoftware.com]
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# These tests exercise pg-volume-backup end-to-end with no stubs.
+# Tests that require a live S3 bucket are skipped (not failed) when
+# AWS_S3_BUCKET_NAME is unset or AWS credentials are unavailable.
+#
+# No PostgreSQL instance is required: the end-to-end test backs up two
+# synthetic raw-volume directories and verifies the resulting S3 objects.
+#
+# IAM permissions required:
+#   Smoke tests (test_staging_dryrun):
+#     None — dry-run makes no API calls
+#   End-to-end correctness test (test_staging_backup_e2e):
+#     On arn:aws:s3:::test.pg-volume-backup-*:
+#       s3:CreateBucket, s3:DeleteBucket
+#       s3:PutObject, s3:GetObject, s3:ListBucket, s3:DeleteObject
+#
+# SYNOPSIS
+#   test/staging [options] [IMAGE]
+#
+# OPTIONS
+#   IMAGE                     Docker image to test (positional; also --image)
+#   --image IMAGE             Docker image to test (env: IMAGE)
+#   --bucket BUCKET           S3 bucket name (env: AWS_S3_BUCKET_NAME)
+#   --aws-config FILE         AWS config file path
+#                             (env: AWS_CONFIG_FILE;
+#                             default: ~/.secrets/aws-config)
+#   --aws-credentials FILE    AWS credentials file path
+#                             (env: AWS_CREDENTIALS_FILE;
+#                             default: ~/.secrets/aws-credentials)
+#   --scan                    Run Trivy HIGH/CRITICAL scan on the image
+#                             (env: STAGING_SCAN; default: true)
+#   --no-scan                 Skip Trivy scan
+#   --yes                     Skip the confirmation prompt
+#   --skip-e2e                Skip test_staging_backup_e2e
+#   --test TEST               Run only the named test function
+#   -h, --help                Print this message and exit
+#
+# ENVIRONMENT
+#   IMAGE                Docker image to test
+#   AWS_S3_BUCKET_NAME   S3 bucket name shown in the preflight summary;
+#                        the e2e test creates its own transient bucket
+#   AWS_CONFIG_FILE      Path to AWS config file
+#   AWS_CREDENTIALS_FILE Path to AWS credentials file
+#   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+#                        Inline credentials (alternative to config/credentials files)
+#   STAGING_SCAN         true/false — controls Trivy scan (default: true)
+#   DOCKER_RUN_ARGS      Extra flags appended to every docker run invocation
+#
+# EXAMPLES
+#   # AWS-independent smoke tests (no credentials needed):
+#   test/staging 1121citrus/pg-volume-backup:latest
+#
+#   # Quick iteration — skip Trivy scan:
+#   test/staging --no-scan 1121citrus/pg-volume-backup:latest
+#
+#   # Full test suite (creates a transient bucket; no production bucket needed):
+#   test/staging \
+#       --aws-config ~/.secrets/aws-config \
+#       1121citrus/pg-volume-backup:latest
+#
+#   # Skip confirmation prompt (CI / scripted use):
+#   test/staging --yes 1121citrus/pg-volume-backup:latest
+#
+#   # Run only the end-to-end correctness test:
+#   test/staging --test test_staging_backup_e2e \
+#       1121citrus/pg-volume-backup:latest
+#
+#   # Skip e2e test when credentials lack s3:CreateBucket:
+#   test/staging --skip-e2e 1121citrus/pg-volume-backup:latest
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Defaults — overridden by environment variables, then by CLI flags.
+# ---------------------------------------------------------------------------
+IMAGE="${IMAGE:-}"
+AWS_S3_BUCKET_NAME="${AWS_S3_BUCKET_NAME:-}"
+AWS_CONFIG_FILE="${AWS_CONFIG_FILE:-}"
+AWS_CREDENTIALS_FILE="${AWS_CREDENTIALS_FILE:-}"
+_YES=false
+_SKIP_E2E=false
+_ONLY_TEST=""
+_SCAN="${STAGING_SCAN:-true}"
+
+# Tool image refs — keep in sync with the top-level build script.
+TRIVY_IMAGE=aquasec/trivy
+TRIVY_TAG=0.62.1
+
+TRIVY_CACHE_VOLUME=pg-volume-backup-trivy-cache
+
+show_help() {
+    # Extract header comment from SYNOPSIS through EXAMPLES (inclusive).
+    sed -n '/^# SYNOPSIS/,/^set -/p' "$0" \
+        | grep '^#' \
+        | sed 's/^# \{0,1\}//'
+}
+
+setup() {
+    [[ -n "${IMAGE}" ]] || {
+        echo "ERROR: IMAGE is not set" >&2
+        echo "       Pass it as a positional arg or use --image IMAGE" >&2
+        return 1
+    }
+    docker image inspect "${IMAGE}" > /dev/null 2>&1 || {
+        echo "ERROR: image not found locally: ${IMAGE}" >&2
+        echo "       Pull or build it first: ./build --no-scan" >&2
+        return 1
+    }
+
+    # Verify the image CMD is the expected service entrypoint.
+    # A mismatched CMD indicates a stale or wrong image.
+    local cmd
+    cmd=$(docker inspect "${IMAGE}" \
+              --format '{{json .Config.Cmd}}' 2>/dev/null || echo "")
+    if [[ "${cmd}" != '["/usr/local/bin/startup"]' ]]; then
+        echo "ERROR: unexpected CMD in ${IMAGE}" >&2
+        echo "       Got:      ${cmd}" >&2
+        echo "       Expected: [\"/usr/local/bin/startup\"]" >&2
+        echo "       Rebuild: ./build --no-scan" >&2
+        return 1
+    fi
+
+    # Verify the CLI binary exists in the image before running any test.
+    if ! docker run --rm "${IMAGE}" \
+            test -x /usr/local/bin/pg-volume-backup > /dev/null 2>&1; then
+        echo "ERROR: /usr/local/bin/pg-volume-backup not found in ${IMAGE}" >&2
+        echo "       Rebuild: ./build --no-scan" >&2
+        return 1
+    fi
+
+    # Resolve the AWS config file path once so each test does not re-derive it.
+    _aws_cfg="${AWS_CONFIG_FILE:-${HOME}/.secrets/aws-config}"
+
+    # The image runs as a non-root user (UID 10001).  A mode-600 config file
+    # owned by the host user is unreadable by that UID inside the container.
+    # Create a world-readable temp copy for the duration of the test run.
+    _aws_cfg_mount="${_aws_cfg}"
+    if [[ -r "${_aws_cfg}" ]]; then
+        _aws_cfg_mount=$(mktemp /tmp/aws-config-staging-XXXXXX)
+        cp "${_aws_cfg}" "${_aws_cfg_mount}"
+        chmod 0644 "${_aws_cfg_mount}"
+    fi
+
+    # Resolve the AWS credentials file; create a world-readable temp copy
+    # for the non-root container user, same as the config file above.
+    _aws_creds="${AWS_CREDENTIALS_FILE:-${HOME}/.secrets/aws-credentials}"
+    _aws_creds_mount="${_aws_creds}"
+    if [[ -r "${_aws_creds}" ]]; then
+        _aws_creds_mount=$(mktemp /tmp/aws-credentials-staging-XXXXXX)
+        cp "${_aws_creds}" "${_aws_creds_mount}"
+        chmod 0644 "${_aws_creds_mount}"
+    fi
+
+    # Run pg-volume-backup with optional AWS credential mounts.
+    # The caller is responsible for mounting BACKUP_ROOT volumes when needed.
+    run_pg_volume_backup() {
+        local aws_mounts=()
+        [[ -r "${_aws_cfg_mount}" ]] && \
+            aws_mounts+=(
+                -v "${_aws_cfg_mount}:/run/secrets/aws-config:ro"
+                -e "AWS_CONFIG_FILE=/run/secrets/aws-config"
+            )
+        [[ -r "${_aws_creds_mount}" ]] && \
+            aws_mounts+=(
+                -v "${_aws_creds_mount}:/run/secrets/aws-credentials:ro"
+                -e "AWS_SHARED_CREDENTIALS_FILE=/run/secrets/aws-credentials"
+            )
+        # shellcheck disable=SC2086
+        docker run --rm ${DOCKER_RUN_ARGS:-} \
+            -e "AWS_S3_BUCKET_NAME=${AWS_S3_BUCKET_NAME:-}" \
+            "${aws_mounts[@]}" \
+            "${IMAGE}" /usr/local/bin/pg-volume-backup "$@" 2>&1
+    }
+
+    # Run an aws CLI command inside the image, bypassing the pg-volume-backup
+    # CMD.  Used for bucket lifecycle operations in test_staging_backup_e2e.
+    _aws() {
+        local aws_mounts=() aws_env=()
+        if [[ -r "${_aws_cfg_mount}" ]]; then
+            aws_mounts+=(-v "${_aws_cfg_mount}:/run/secrets/aws-config:ro")
+            aws_env+=(-e "AWS_CONFIG_FILE=/run/secrets/aws-config")
+        fi
+        if [[ -r "${_aws_creds_mount}" ]]; then
+            aws_mounts+=(-v "${_aws_creds_mount}:/run/secrets/aws-credentials:ro")
+            aws_env+=(-e "AWS_SHARED_CREDENTIALS_FILE=/run/secrets/aws-credentials")
+        fi
+        # shellcheck disable=SC2086
+        docker run --rm --entrypoint /usr/bin/aws \
+            ${DOCKER_RUN_ARGS:-} \
+            "${aws_mounts[@]}" \
+            "${aws_env[@]}" \
+            "${IMAGE}" "$@"
+    }
+
+    export _aws_cfg _aws_cfg_mount _aws_creds _aws_creds_mount
+    export -f _aws run_pg_volume_backup
+
+    # Create a shared image archive for Trivy — avoids mounting the Docker
+    # socket inside scanner containers, which hangs on macOS Docker Desktop.
+    _scan_tar=""
+    if [[ "${_SCAN}" == "true" ]]; then
+        _scan_tar=$(mktemp /tmp/staging-scan-XXXXXX)
+        docker save "${IMAGE}" > "${_scan_tar}"
+    fi
+    export _scan_tar
+
+    # Clean up temp files on exit (world-readable credential copies + scan archive).
+    # shellcheck disable=SC2064
+    trap 'rm -f "${_aws_cfg_mount}" "${_aws_creds_mount}" "${_scan_tar}"' EXIT
+}
+
+# _skip prints a SKIP notice, increments the shared skip counter, and returns 0
+# so the test is not counted as a failure.
+_SKIP_COUNT=0
+_skip() {
+    echo "SKIP '${FUNCNAME[1]}': $*"
+    (( ++_SKIP_COUNT )) || true
+}
+
+# _aws_available returns 0 when AWS credentials are present.
+_aws_available() {
+    [[ -r "${_aws_cfg_mount:-/nonexistent}" ]] || \
+    [[ -r "${_aws_creds_mount:-/nonexistent}" ]] || \
+    [[ -n "${AWS_ACCESS_KEY_ID:-}" ]]
+}
+
+# ── AWS-independent tests ─────────────────────────────────────────────────────
+# These exercise CLI option parsing only; no S3 connection is attempted.
+
+test_staging_help() {
+    local output result=0
+    output=$(run_pg_volume_backup --help 2>&1) || result=$?
+    if [[ ${result} -eq 0 ]] && echo "${output}" | grep -q 'Usage:'; then
+        echo "PASS '${FUNCNAME[0]}': --help exits 0 and prints usage"
+    else
+        echo "FAIL '${FUNCNAME[0]}': --help failed (exit=${result})"
+        return 1
+    fi
+}
+
+test_staging_version() {
+    local output result=0
+    output=$(run_pg_volume_backup --version 2>&1) || result=$?
+    if [[ ${result} -eq 0 ]] && [[ -n "${output}" ]]; then
+        echo "PASS '${FUNCNAME[0]}': --version exits 0 and prints: ${output}"
+    else
+        echo "FAIL '${FUNCNAME[0]}': --version failed (exit=${result})"
+        return 1
+    fi
+}
+
+test_staging_unknown_option() {
+    local result=0
+    run_pg_volume_backup --no-such-option > /dev/null 2>&1 || result=$?
+    if [[ ${result} -ne 0 ]]; then
+        echo "PASS '${FUNCNAME[0]}': exits non-zero for unknown option"
+    else
+        echo "FAIL '${FUNCNAME[0]}': should have exited non-zero" \
+             "for unknown option"
+        return 1
+    fi
+}
+
+test_staging_no_bucket() {
+    # Run pg-volume-backup without AWS_S3_BUCKET_NAME; must exit non-zero.
+    # Uses plain docker run (not run_pg_volume_backup) to avoid injecting the
+    # caller's AWS_S3_BUCKET_NAME from the outer environment.
+    local result=0
+    # shellcheck disable=SC2086
+    docker run --rm ${DOCKER_RUN_ARGS:-} \
+        "${IMAGE}" /usr/local/bin/pg-volume-backup \
+        > /dev/null 2>&1 || result=$?
+    if [[ ${result} -ne 0 ]]; then
+        echo "PASS '${FUNCNAME[0]}': exits non-zero without AWS_S3_BUCKET_NAME"
+    else
+        echo "FAIL '${FUNCNAME[0]}': should have exited non-zero" \
+             "without AWS_S3_BUCKET_NAME"
+        return 1
+    fi
+}
+
+test_staging_no_volumes() {
+    # AWS_S3_BUCKET_NAME set, but BACKUP_ROOT contains no subdirectories.
+    local tmpdir result=0
+    tmpdir=$(mktemp -d /tmp/staging-novol-XXXXXX)
+    chmod o+rx "${tmpdir}"
+
+    # shellcheck disable=SC2086
+    docker run --rm ${DOCKER_RUN_ARGS:-} \
+        -e "AWS_S3_BUCKET_NAME=test-bucket" \
+        -e "BACKUP_ROOT=/backup" \
+        -v "${tmpdir}:/backup:ro" \
+        "${IMAGE}" /usr/local/bin/pg-volume-backup \
+        > /dev/null 2>&1 || result=$?
+    rm -rf "${tmpdir}"
+
+    if [[ ${result} -ne 0 ]]; then
+        echo "PASS '${FUNCNAME[0]}': exits non-zero with empty BACKUP_ROOT"
+    else
+        echo "FAIL '${FUNCNAME[0]}': should have exited non-zero" \
+             "with empty BACKUP_ROOT"
+        return 1
+    fi
+}
+
+test_staging_dryrun() {
+    # --dry-run with a synthetic volume and a mock bucket exits 0 and makes
+    # no S3 calls.
+    local tmpdir result=0 output
+    tmpdir=$(mktemp -d /tmp/staging-dryrun-XXXXXX)
+    mkdir -p "${tmpdir}/uploads"
+    echo "test file" > "${tmpdir}/uploads/document.pdf"
+    chmod -R o+rx "${tmpdir}"
+
+    # shellcheck disable=SC2086
+    output=$(docker run --rm ${DOCKER_RUN_ARGS:-} \
+        -e "AWS_S3_BUCKET_NAME=test-bucket" \
+        -e "BACKUP_ROOT=/backup" \
+        -e "BACKUP_HOSTNAME=staging-test" \
+        -v "${tmpdir}:/backup:ro" \
+        "${IMAGE}" /usr/local/bin/pg-volume-backup --dry-run \
+        2>&1) || result=$?
+    rm -rf "${tmpdir}"
+
+    if [[ ${result} -eq 0 ]]; then
+        echo "PASS '${FUNCNAME[0]}': --dry-run exits 0 with synthetic volume"
+    else
+        echo "FAIL '${FUNCNAME[0]}': --dry-run exited non-zero (exit=${result})"
+        printf '  -- output --\n' >&2
+        printf '%s\n' "${output}" >&2
+        return 1
+    fi
+}
+
+# ── AWS-dependent tests ───────────────────────────────────────────────────────
+# Each test skips when AWS credentials are absent.
+
+# test_staging_backup_e2e: end-to-end backup correctness test.
+#
+# Creates a disposable bucket named test.pg-volume-backup-<epoch>,
+# backs up two synthetic volumes (uploads/ and data/) to it without GPG
+# encryption or compression, then counts the resulting S3 objects.
+#
+# Each volume produces two objects: a .tar archive and a .tar.sha256
+# companion.  Two volumes × 2 objects = 4 objects total.
+#
+# The bucket is always removed in a RETURN trap, even on failure.
+# The Docker socket is NOT mounted, so no labeled containers are stopped —
+# the raw-tar pipeline runs unconditionally.
+#
+# Required IAM permissions (on test.pg-volume-backup-*):
+#   s3:CreateBucket, s3:DeleteBucket, s3:PutObject, s3:GetObject,
+#   s3:ListBucket, s3:DeleteObject
+test_staging_backup_e2e() {
+    _aws_available || {
+        _skip "AWS credentials not configured"
+        return 0
+    }
+
+    local epoch test_bucket tmpdir
+    epoch=$(date +%s)
+    test_bucket="test.pg-volume-backup-${epoch}"
+    tmpdir=$(mktemp -d /tmp/staging-e2e-XXXXXX)
+
+    # Always remove the transient bucket and temp dir on return.
+    # shellcheck disable=SC2064
+    trap "
+        _aws s3 rb 's3://${test_bucket}' --force > /dev/null 2>&1 || true
+        rm -rf '${tmpdir}'
+    " RETURN
+
+    # ── Create bucket ─────────────────────────────────────────────────────────
+    printf '  creating transient test bucket s3://%s...\n' \
+        "${test_bucket}" >&2
+    _aws s3 mb "s3://${test_bucket}" > /dev/null 2>&1 || {
+        echo "FAIL '${FUNCNAME[0]}': could not create bucket" \
+             "(check s3:CreateBucket on test.pg-volume-backup-*)"
+        return 1
+    }
+
+    # ── Populate synthetic volumes ────────────────────────────────────────────
+    # Two volume directories: uploads/ and data/.  One file each is
+    # sufficient to exercise the full archive + upload pipeline.
+    mkdir -p "${tmpdir}/uploads" "${tmpdir}/data"
+    echo "fake-pdf-content" > "${tmpdir}/uploads/document.pdf"
+    echo "fake-data"        > "${tmpdir}/data/file.dat"
+    chmod -R o+rx "${tmpdir}"
+
+    # ── Run backup ────────────────────────────────────────────────────────────
+    local aws_mounts=()
+    [[ -r "${_aws_cfg_mount}" ]] && \
+        aws_mounts+=(
+            -v "${_aws_cfg_mount}:/run/secrets/aws-config:ro"
+            -e "AWS_CONFIG_FILE=/run/secrets/aws-config"
+        )
+    [[ -r "${_aws_creds_mount}" ]] && \
+        aws_mounts+=(
+            -v "${_aws_creds_mount}:/run/secrets/aws-credentials:ro"
+            -e "AWS_SHARED_CREDENTIALS_FILE=/run/secrets/aws-credentials"
+        )
+    printf '  running backup to s3://%s...\n' "${test_bucket}" >&2
+    local bk_output bk_result=0
+    # shellcheck disable=SC2086
+    bk_output=$(docker run --rm ${DOCKER_RUN_ARGS:-} \
+        -e "AWS_S3_BUCKET_NAME=${test_bucket}" \
+        -e "BACKUP_ROOT=/backup" \
+        -e "BACKUP_HOSTNAME=staging-test" \
+        -e "COMPRESSION=none" \
+        -v "${tmpdir}:/backup:ro" \
+        "${aws_mounts[@]}" \
+        "${IMAGE}" /usr/local/bin/pg-volume-backup 2>&1) || bk_result=$?
+
+    if [[ ${bk_result} -ne 0 ]]; then
+        echo "FAIL '${FUNCNAME[0]}': pg-volume-backup exited" \
+             "non-zero (${bk_result})"
+        printf '  -- output --\n' >&2
+        printf '%s\n' "${bk_output}" >&2
+        return 1
+    fi
+
+    # ── Verify object count ───────────────────────────────────────────────────
+    # 2 volumes × 2 objects each (.tar + .tar.sha256) = 4 objects total.
+    local count=0
+    count=$(_aws s3 ls --recursive "s3://${test_bucket}/" \
+                2>/dev/null | wc -l | tr -d ' ')
+
+    if [[ "${count}" -eq 4 ]]; then
+        echo "PASS '${FUNCNAME[0]}': ${count} objects in S3" \
+             "(2 archives + 2 checksums for 2 volumes)"
+    else
+        echo "FAIL '${FUNCNAME[0]}': ${count} objects in S3 (expected 4)"
+        printf 'Objects in bucket:\n' >&2
+        _aws s3 ls --recursive "s3://${test_bucket}/" >&2 2>&1 || true
+        printf 'Backup output:\n' >&2
+        printf '%s\n' "${bk_output}" >&2
+        return 1
+    fi
+}
+
+# ── Scan tests ────────────────────────────────────────────────────────────────
+
+# test_staging_trivy_scan: Trivy HIGH/CRITICAL image scan.
+# Mirrors build Stage 4.  Fails when unfixed HIGH/CRITICAL CVEs are found.
+# Skip with --no-scan for fast iteration during development.
+test_staging_trivy_scan() {
+    [[ "${_SCAN}" == "true" ]] || {
+        _skip "--no-scan: Trivy scan skipped"
+        return 0
+    }
+    printf '  running Trivy scan on %s...\n' "${IMAGE}" >&2
+
+    local result=0
+    docker run --rm \
+        -v "${_scan_tar}:/scan.tar:ro" \
+        -v "${TRIVY_CACHE_VOLUME}:/root/.cache/trivy" \
+        "${TRIVY_IMAGE}:${TRIVY_TAG}" image \
+            --quiet \
+            --no-progress \
+            --exit-code 1 \
+            --ignore-unfixed \
+            --severity HIGH,CRITICAL \
+            --timeout 5m \
+            --input /scan.tar 2>&1 || result=$?
+    if [[ ${result} -eq 0 ]]; then
+        echo "PASS '${FUNCNAME[0]}': no unfixed HIGH/CRITICAL CVEs found"
+    else
+        echo "FAIL '${FUNCNAME[0]}': unfixed HIGH/CRITICAL CVEs found" \
+             "(exit=${result})"
+        return 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Test runner
+# ---------------------------------------------------------------------------
+
+run_tests() {
+    local all_tests=(
+        test_staging_help
+        test_staging_version
+        test_staging_unknown_option
+        test_staging_trivy_scan
+        test_staging_no_bucket
+        test_staging_no_volumes
+        test_staging_dryrun
+        test_staging_backup_e2e
+    )
+
+    # Apply --test and --skip-e2e filters.
+    local tests=()
+    if [[ -n "${_ONLY_TEST}" ]]; then
+        local valid=false t
+        for t in "${all_tests[@]}"; do
+            [[ "${t}" == "${_ONLY_TEST}" ]] && valid=true && break
+        done
+        if ! "${valid}"; then
+            echo "ERROR: unknown test '${_ONLY_TEST}'" >&2
+            printf '       Available tests:\n' >&2
+            printf '         %s\n' "${all_tests[@]}" >&2
+            return 1
+        fi
+        tests=("${_ONLY_TEST}")
+    else
+        for t in "${all_tests[@]}"; do
+            [[ "${t}" == "test_staging_backup_e2e" \
+                && "${_SKIP_E2E}" == "true" ]] && continue
+            tests+=("${t}")
+        done
+    fi
+
+    setup || { echo "ERROR: Setup failed"; return 1; }
+
+    echo "Running staging tests for pg-volume-backup..."
+    echo "================================================="
+    echo "Image:  ${IMAGE}"
+    if _aws_available; then
+        echo "AWS:    credentials configured"
+    else
+        echo "AWS:    not configured — AWS-dependent tests will be skipped"
+    fi
+    [[ -n "${_ONLY_TEST}" ]]  && echo "Filter: --test ${_ONLY_TEST}"
+    "${_SKIP_E2E}"            && echo "Filter: --skip-e2e"
+    echo "Scan:   ${_SCAN} (Trivy HIGH/CRITICAL)"
+    echo "================================================="
+
+    _SKIP_COUNT=0
+    local passed=0 failed=0
+    for t in "${tests[@]}"; do
+        if "${t}"; then
+            (( ++passed )) || true
+        else
+            (( ++failed )) || true
+        fi
+    done
+    # Subtract skips from passed: skipped tests exit 0 but are not passes.
+    passed=$(( passed - _SKIP_COUNT ))
+
+    local total=${#tests[@]}
+    echo "================================================="
+    echo "Results: ${passed} passed, ${failed} failed," \
+         "${_SKIP_COUNT} skipped (${total} run)"
+    return "${failed}"
+}
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+main() {
+    # ── Option parsing ────────────────────────────────────────────────────────
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --image)            IMAGE="$2";                shift ;;
+            --bucket)           AWS_S3_BUCKET_NAME="$2";  shift ;;
+            --aws-config)       AWS_CONFIG_FILE="$2";     shift ;;
+            --aws-credentials)  AWS_CREDENTIALS_FILE="$2"; shift ;;
+            --scan)       _SCAN=true   ;;
+            --no-scan)    _SCAN=false  ;;
+            --yes)        _YES=true    ;;
+            --skip-e2e)   _SKIP_E2E=true ;;
+            --test)       _ONLY_TEST="$2"; shift ;;
+            -h|--help)    show_help; exit 0 ;;
+            -*)
+                echo "Unknown option: $1" >&2
+                echo "Run 'test/staging --help' for usage." >&2
+                exit 1 ;;
+            *)
+                # First non-option positional arg is the image.
+                if [[ -z "${IMAGE}" ]]; then
+                    IMAGE="$1"
+                else
+                    echo "Unexpected argument: $1" >&2
+                    exit 1
+                fi ;;
+        esac
+        shift
+    done
+
+    # Propagate resolved values so setup() and test functions see them.
+    export IMAGE AWS_S3_BUCKET_NAME AWS_CONFIG_FILE AWS_CREDENTIALS_FILE
+    export _YES _SKIP_E2E _ONLY_TEST _SCAN
+
+    # ── Preflight summary ────────────────────────────────────────────────────
+    local aws_cfg="${AWS_CONFIG_FILE:-${HOME}/.secrets/aws-config}"
+    local aws_creds="${AWS_CREDENTIALS_FILE:-${HOME}/.secrets/aws-credentials}"
+    local will_touch_aws=false
+    { [[ -r "${aws_cfg}" ]] || [[ -r "${aws_creds}" ]] \
+      || [[ -n "${AWS_ACCESS_KEY_ID:-}" ]]; } && \
+        will_touch_aws=true
+
+    echo "================================================================"
+    echo " WARNING: test/staging exercises live infrastructure"
+    echo "================================================================"
+    echo ""
+    echo "  Image:    ${IMAGE:-<not set>}"
+    if [[ "${_SCAN}" == "true" ]]; then
+        echo "  Scan:     Trivy HIGH/CRITICAL (--no-scan to skip)"
+    else
+        echo "  Scan:     skipped (--no-scan)"
+    fi
+    echo ""
+
+    if "${will_touch_aws}"; then
+        echo "  E2E test: will CREATE and DELETE a transient bucket:"
+        echo "            s3://test.pg-volume-backup-<epoch>"
+        echo "            2 synthetic volumes are backed up and verified."
+        echo "            Requires s3:CreateBucket + s3:PutObject +"
+        echo "            s3:DeleteBucket on test.pg-volume-backup-*"
+    else
+        echo "  AWS:      not configured — AWS-dependent tests will be skipped"
+    fi
+    echo ""
+
+    # ── Confirmation ──────────────────────────────────────────────────────────
+    # Prompt only when real AWS will be touched; --yes skips for scripted use.
+    if "${will_touch_aws}"; then
+        if "${_YES}"; then
+            echo "  (--yes: skipping confirmation prompt)"
+            echo ""
+        else
+            printf 'Type "yes" to proceed, or press Enter to abort: '
+            local response
+            read -r response
+            echo ""
+            if [[ "${response}" != "yes" ]]; then
+                echo "Aborted."
+                return 1
+            fi
+        fi
+    fi
+
+    run_tests
+}
+
+[[ "${BASH_SOURCE[0]}" == "$0" ]] && main "$@"

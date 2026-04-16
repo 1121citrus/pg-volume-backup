@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+
+# pg-volume-backup — back up Docker volumes and PostgreSQL databases to S3.
+#
+# Copyright (C) 2026 James Hanlon [mailto:jim@hanlonsoftware.com]
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+command=$(basename "${0}")
+bindir=$(readlink -f "$(dirname "${0}")")
+export PATH="${bindir}:${PATH}"
+
+# shellcheck disable=SC1091
+source /usr/local/include/bash/common-functions
+
+ENV="${ENV:-${HOME:-/root}/.env}"
+set -o errexit -o errtrace -o nounset -o pipefail
+# shellcheck disable=SC1090
+[[ -r "${ENV}" ]] && source "${ENV}"
+is_true "${DEBUG:=false}" && set -o xtrace -o verbose
+
+VERSION_FILE=/usr/local/share/pg-volume-backup/version
+version=$(cat "${VERSION_FILE}" 2>/dev/null || echo "dev")
+
+usage() {
+    cat <<EOF
+${command} — back up Docker volumes and PostgreSQL databases to S3
+
+Usage: ${command} [options]
+
+Options:
+  -?, --help       Display this help text
+  -v, --version    Display command version
+  --dry-run        Print actions without executing them
+
+Environment variables:
+  AWS_S3_BUCKET_NAME          S3 bucket (required; may include path prefix)
+  AWS_CONFIG_FILE             AWS config file (default: /run/secrets/aws-config)
+  AWS_SHARED_CREDENTIALS_FILE AWS credentials file
+                              (default: /run/secrets/aws-credentials)
+  AWS_DRYRUN                  Pass --dryrun to AWS CLI (default: false)
+  BACKUP_HOSTNAME       Hostname for archive names (default: hostname)
+  COMPRESSION           bzip2, gzip, xz, lzop, pigz, none (default: none)
+  GPG_PASSPHRASE        GPG passphrase (prefer GPG_PASSPHRASE_FILE)
+  GPG_PASSPHRASE_FILE   Path to GPG passphrase file
+  GPG_CIPHER_ALGO       GPG cipher algorithm (default: aes256)
+  DB_HOST               PostgreSQL host (required when DB_VOLUME is set)
+  DB_PORT               PostgreSQL port (default: 5432)
+  DB_NAME               Database name (required when DB_VOLUME is set)
+  DB_USER               Database user (required when DB_VOLUME is set)
+  DB_PASSWORD           Database password (prefer DB_PASSWORD_FILE)
+  DB_PASSWORD_FILE      Path to database password file
+  DB_FORMAT             pg_dump format: plain or custom (default: plain)
+  DB_VOLUME             Volume name that maps to pg_dump output
+  TZ                    Timezone (default: UTC)
+EOF
+}
+
+DRYRUN=false
+
+while [[ $# -gt 0 ]]; do
+    case "${1}" in
+        -\?|--help)    usage; exit 0 ;;
+        -v|--version)  echo "${version}"; exit 0 ;;
+        --dry-run)     DRYRUN=true ;;
+        -*)            error "unknown option: ${1}" ;;
+        *)             error "unexpected argument: ${1}" ;;
+    esac
+    shift
+done
+
+export DRYRUN
+
+# Resolve _FILE variants for secrets before any work begins.
+GPG_PASSPHRASE="${GPG_PASSPHRASE:-$(
+    cat "${GPG_PASSPHRASE_FILE:-/run/secrets/gpg-passphrase}" \
+        2>/dev/null || true)}"
+DB_PASSWORD="${DB_PASSWORD:-$(
+    cat "${DB_PASSWORD_FILE:-/run/secrets/db-password}" \
+        2>/dev/null || true)}"
+
+# Validate required variables.
+[[ -n "${AWS_S3_BUCKET_NAME:-}" ]] || error "need AWS_S3_BUCKET_NAME"
+
+# Validate DB variables when DB_VOLUME is set.
+if [[ -n "${DB_VOLUME:-}" ]]; then
+    [[ -n "${DB_HOST:-}" ]] \
+        || error "need DB_HOST when DB_VOLUME is set"
+    [[ -n "${DB_NAME:-}" ]] \
+        || error "need DB_NAME when DB_VOLUME is set"
+    [[ -n "${DB_USER:-}" ]] \
+        || error "need DB_USER when DB_VOLUME is set"
+fi
+
+# Discover volumes: each subdirectory of BACKUP_ROOT is a volume name.
+backup_root="${BACKUP_ROOT:-/backup}"
+mapfile -t volumes < <(
+    find "${backup_root}" -mindepth 1 -maxdepth 1 -type d \
+        -exec basename {} \; 2>/dev/null | sort
+)
+[[ ${#volumes[@]} -gt 0 ]] \
+    || error "no volumes found under ${backup_root}/"
+
+# Discover containers to stop (requires Docker socket).
+stop_containers=()
+if [[ -S /var/run/docker.sock ]]; then
+    mapfile -t stop_containers < <(
+        docker ps --format '{{.ID}}' \
+            --filter 'label=pg-volume-backup.stop-during-backup=true' \
+            2>/dev/null || true
+    )
+fi
+
+# Build workdir; register cleanup on exit.
+workdir=$(mktemp -d)
+cleanup() { rm -rf "${workdir}" >/dev/null 2>&1 || true; }
+trap 'cleanup' EXIT
+
+timestamp=$(date +%Y%m%dT%H%M%S)
+backup_hostname="${BACKUP_HOSTNAME:-$(hostname)}"
+containers_stopped=false
+
+info "begin ${command} ${version}"
+is_true "${DRYRUN}" && info "dry-run mode — no changes will be made"
+info "volumes: ${volumes[*]}"
+
+# ── Phase 1: create archives ──────────────────────────────────────────────
+# Parallel arrays: tar_files[i] is the archive path for tar_names[i].
+tar_files=()
+tar_names=()
+
+for name in "${volumes[@]}"; do
+    bn="${timestamp}-${backup_hostname}-${name}-backup"
+    tar_file="${workdir}/${bn}.tar"
+    info "volume: ${name}"
+
+    if [[ "${DB_VOLUME:-}" == "${name}" ]]; then
+        # pg_dump pipeline — no container stop required.
+        db_format="${DB_FORMAT:-plain}"
+        info "pg_dump: ${DB_NAME:-} (${DB_HOST:-}:${DB_PORT:-5432})"
+        if [[ "${db_format}" == "custom" ]]; then
+            dump_file="${workdir}/${bn}.pgdump"
+        else
+            dump_file="${workdir}/${bn}.sql"
+        fi
+        if ! is_true "${DRYRUN}"; then
+            PGPASSWORD="${DB_PASSWORD}" pg_dump \
+                --host="${DB_HOST:-}" \
+                --port="${DB_PORT:-5432}" \
+                --username="${DB_USER:-}" \
+                --no-password \
+                --format="${db_format}" \
+                "${DB_NAME:-}" \
+                > "${dump_file}"
+            tar --create --file="${tar_file}" \
+                --directory="${workdir}" \
+                "$(basename "${dump_file}")"
+            rm -f "${dump_file}"
+        else
+            info "would pg_dump ${DB_NAME:-} -> ${dump_file}"
+            info "would tar ${dump_file} -> ${tar_file}"
+        fi
+    else
+        # Raw volume tar pipeline; stop labeled containers once before
+        # the first raw-tar volume to quiesce write activity.
+        if ! "${containers_stopped}" \
+           && [[ ${#stop_containers[@]} -gt 0 ]]; then
+            info "stopping ${#stop_containers[@]} container(s)"
+            if ! is_true "${DRYRUN}"; then
+                docker stop "${stop_containers[@]}"
+            else
+                info "would stop: ${stop_containers[*]}"
+            fi
+            containers_stopped=true
+        fi
+        info "tar: ${backup_root}/${name}"
+        if ! is_true "${DRYRUN}"; then
+            tar --create --file="${tar_file}" \
+                --directory="${backup_root}/${name}" .
+        else
+            info "would tar ${backup_root}/${name} -> ${tar_file}"
+        fi
+    fi
+
+    tar_files+=("${tar_file}")
+    tar_names+=("${name}")
+done
+
+# ── Phase 2: restart stopped containers ──────────────────────────────────
+if "${containers_stopped}" && [[ ${#stop_containers[@]} -gt 0 ]]; then
+    info "restarting ${#stop_containers[@]} container(s)"
+    if ! is_true "${DRYRUN}"; then
+        docker start "${stop_containers[@]}"
+    else
+        info "would start: ${stop_containers[*]}"
+    fi
+fi
+
+# ── Phase 3: SHA256 → compress → encrypt → upload ────────────────────────
+compression="${COMPRESSION:-none}"
+cipher="${GPG_CIPHER_ALGO:-aes256}"
+aws_dry=""
+is_true "${AWS_DRYRUN:-false}" && aws_dry="--dryrun"
+
+for i in "${!tar_files[@]}"; do
+    tar_file="${tar_files[${i}]}"
+    name="${tar_names[${i}]}"
+    bn="${tar_file%.tar}"
+    bn=$(basename "${bn}")
+
+    # SHA256 is computed on the uncompressed, unencrypted tar so that
+    # integrity can be verified after decrypt + decompress.
+    sha256_file="${workdir}/${bn}.tar.sha256"
+    info "sha256: ${bn}.tar"
+    if ! is_true "${DRYRUN}"; then
+        (cd "${workdir}" && sha256sum "${bn}.tar" > "${sha256_file}")
+    fi
+
+    # Compress.
+    archive="${tar_file}"
+    case "${compression}" in
+        bzip2|bz2)
+            info "compress: bzip2"
+            if ! is_true "${DRYRUN}"; then
+                bzip2 --keep "${tar_file}"
+                rm -f "${tar_file}"
+                archive="${tar_file}.bz2"
+            fi
+            ;;
+        gzip|gz)
+            info "compress: gzip"
+            if ! is_true "${DRYRUN}"; then
+                gzip --keep "${tar_file}"
+                rm -f "${tar_file}"
+                archive="${tar_file}.gz"
+            fi
+            ;;
+        xz)
+            info "compress: xz"
+            if ! is_true "${DRYRUN}"; then
+                xz --keep "${tar_file}"
+                rm -f "${tar_file}"
+                archive="${tar_file}.xz"
+            fi
+            ;;
+        pigz)
+            info "compress: pigz"
+            if ! is_true "${DRYRUN}"; then
+                pigz --keep "${tar_file}"
+                rm -f "${tar_file}"
+                archive="${tar_file}.gz"
+            fi
+            ;;
+        lzop)
+            info "compress: lzop"
+            if ! is_true "${DRYRUN}"; then
+                lzop --keep --output="${tar_file}.lzo" "${tar_file}"
+                rm -f "${tar_file}"
+                archive="${tar_file}.lzo"
+            fi
+            ;;
+        none|"")
+            info "compression: none"
+            ;;
+        *)
+            error "unknown compression: ${compression}"
+            ;;
+    esac
+
+    # Encrypt with GPG symmetric encryption when a passphrase is set.
+    if [[ -n "${GPG_PASSPHRASE:-}" ]]; then
+        encrypted="${archive}.gpg"
+        info "encrypt: gpg (${cipher})"
+        if ! is_true "${DRYRUN}"; then
+            printf '%s\n' "${GPG_PASSPHRASE}" \
+                | gpg --batch --yes \
+                      --symmetric \
+                      --cipher-algo "${cipher}" \
+                      --passphrase-fd 0 \
+                      --pinentry-mode loopback \
+                      --output "${encrypted}" \
+                      "${archive}"
+            rm -f "${archive}"
+            archive="${encrypted}"
+        fi
+    fi
+
+    # Upload archive and SHA256 companion to S3.
+    s3_dir="s3://${AWS_S3_BUCKET_NAME}/${name}"
+    archive_name=$(basename "${archive}")
+    sha256_name=$(basename "${sha256_file}")
+    info "upload: ${s3_dir}/${archive_name}"
+    info "upload: ${s3_dir}/${sha256_name}"
+    if ! is_true "${DRYRUN}"; then
+        # aws_dry is intentionally word-split when non-empty.
+        # shellcheck disable=SC2086
+        aws s3 mv ${aws_dry} "${archive}" "${s3_dir}/${archive_name}"
+        # shellcheck disable=SC2086
+        aws s3 mv ${aws_dry} "${sha256_file}" "${s3_dir}/${sha256_name}"
+    fi
+done
+
+info "finish ${command}"

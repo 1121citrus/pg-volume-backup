@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+
+# backup — service script: sources env and invokes pg-volume-backup.
+#
+# Copyright (C) 2026 James Hanlon [mailto:jim@hanlonsoftware.com]
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+command=$(basename "${0}")
+bindir=$(readlink -f "$(dirname "${0}")")
+export PATH="${bindir}:${PATH}"
+
+# shellcheck disable=SC1091
+source /usr/local/include/bash/common-functions
+
+ENV="${ENV:-${HOME:-/root}/.env}"
+set -o errexit -o errtrace -o nounset -o pipefail
+# shellcheck disable=SC1090
+[[ -r "${ENV}" ]] && source "${ENV}"
+is_true "${DEBUG:=false}" && set -o xtrace -o verbose
+
+export AWS_CONFIG_FILE="${AWS_CONFIG_FILE:=/run/secrets/aws-config}"
+export AWS_SHARED_CREDENTIALS_FILE="${AWS_SHARED_CREDENTIALS_FILE:=/run/secrets/aws-credentials}"
+
+info "begin ${command}"
+pg-volume-backup
+info "finish ${command}"
