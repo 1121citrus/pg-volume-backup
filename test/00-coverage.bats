@@ -3,7 +3,7 @@
 #
 # These tests invoke src/ scripts directly (not inside Docker) so that
 # kcov can instrument them.  Stubs for external binaries (aws, crond,
-# pg_dump, pidof, pgrep) are written into a temp bin dir prepended to
+# docker, pg_dump, pidof, pgrep) are written into a temp bin dir prepended to
 # PATH before each test.
 #
 # Copyright (C) 2026 James Hanlon [mailto:jim@hanlonsoftware.com]
@@ -40,6 +40,17 @@ setup() {
         'exit 0' \
         > "${STUB_DIR}/aws"
     chmod +x "${STUB_DIR}/aws"
+
+    # docker stub: default no-op for ps/stop/start paths.
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'case "${1:-}" in' \
+        '    ps) exit 0 ;;' \
+        '    stop|start) exit 0 ;;' \
+        'esac' \
+        'exit 0' \
+        > "${STUB_DIR}/docker"
+    chmod +x "${STUB_DIR}/docker"
 
     # pg_dump stub: emits a minimal SQL header.
     printf '%s\n' \
@@ -226,6 +237,46 @@ teardown() {
     run env COMPRESSION=invalid \
         bash "${REPO_ROOT}/src/bin/pg-volume-backup"
     [ "$status" -ne 0 ]
+}
+
+@test "pg-volume-backup: restarts containers on failure after stop" {
+    local docker_log
+    docker_log="${TEST_TMPDIR}/docker.log"
+
+    # docker stub: one labeled container is discovered and stop/start
+    # operations are logged for assertion.
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'log="${DOCKER_STUB_LOG:?Need DOCKER_STUB_LOG}"' \
+        'case "${1:-}" in' \
+        '    ps)' \
+        '        printf "%s\n" "cid-1"' \
+        '        ;;' \
+        '    stop)' \
+        '        printf "stop %s\n" "${*:2}" >> "${log}"' \
+        '        ;;' \
+        '    start)' \
+        '        printf "start %s\n" "${*:2}" >> "${log}"' \
+        '        ;;' \
+        'esac' \
+        'exit 0' \
+        > "${STUB_DIR}/docker"
+    chmod +x "${STUB_DIR}/docker"
+
+    # tar stub fails to force exit before the normal restart phase.
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'exit 2' \
+        > "${STUB_DIR}/tar"
+    chmod +x "${STUB_DIR}/tar"
+
+    run env DOCKER_STUB_LOG="${docker_log}" \
+        bash "${REPO_ROOT}/src/bin/pg-volume-backup"
+    [ "$status" -ne 0 ]
+    run grep -q '^stop cid-1$' "${docker_log}"
+    [ "$status" -eq 0 ]
+    run grep -q '^start cid-1$' "${docker_log}"
+    [ "$status" -eq 0 ]
 }
 
 # ── startup ───────────────────────────────────────────────────────────────────

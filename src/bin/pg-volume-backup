@@ -102,24 +102,41 @@ mapfile -t volumes < <(
 [[ ${#volumes[@]} -gt 0 ]] \
     || error "no volumes found under ${backup_root}/"
 
-# Discover containers to stop (requires Docker socket).
+# Discover containers to stop.
 stop_containers=()
-if [[ -S /var/run/docker.sock ]]; then
-    mapfile -t stop_containers < <(
-        docker ps --format '{{.ID}}' \
-            --filter 'label=pg-volume-backup.stop-during-backup=true' \
-            2>/dev/null || true
-    )
-fi
+mapfile -t stop_containers < <(
+    docker ps --format '{{.ID}}' \
+        --filter 'label=pg-volume-backup.stop-during-backup=true' \
+        2>/dev/null || true
+)
 
 # Build workdir; register cleanup on exit.
 workdir=$(mktemp -d)
-cleanup() { rm -rf "${workdir}" >/dev/null 2>&1 || true; }
+containers_stopped=false
+restart_pending=false
+
+restart_containers_if_needed() {
+    if "${restart_pending}" && [[ ${#stop_containers[@]} -gt 0 ]]; then
+        info "restarting ${#stop_containers[@]} container(s) after failure"
+        if ! is_true "${DRYRUN}"; then
+            if ! docker start "${stop_containers[@]}" >/dev/null 2>&1; then
+                warn "failed to restart container(s): ${stop_containers[*]}"
+            fi
+        else
+            info "would start (after failure): ${stop_containers[*]}"
+        fi
+        restart_pending=false
+    fi
+}
+
+cleanup() {
+    restart_containers_if_needed
+    rm -rf "${workdir}" >/dev/null 2>&1 || true
+}
 trap 'cleanup' EXIT
 
 timestamp=$(date +%Y%m%dT%H%M%S)
 backup_hostname="${BACKUP_HOSTNAME:-$(hostname)}"
-containers_stopped=false
 
 info "begin ${command} ${version}"
 is_true "${DRYRUN}" && info "dry-run mode — no changes will be made"
@@ -169,6 +186,7 @@ for name in "${volumes[@]}"; do
             info "stopping ${#stop_containers[@]} container(s)"
             if ! is_true "${DRYRUN}"; then
                 docker stop "${stop_containers[@]}"
+                restart_pending=true
             else
                 info "would stop: ${stop_containers[*]}"
             fi
@@ -192,9 +210,11 @@ if "${containers_stopped}" && [[ ${#stop_containers[@]} -gt 0 ]]; then
     info "restarting ${#stop_containers[@]} container(s)"
     if ! is_true "${DRYRUN}"; then
         docker start "${stop_containers[@]}"
+        restart_pending=false
     else
         info "would start: ${stop_containers[*]}"
     fi
+    containers_stopped=false
 fi
 
 # ── Phase 3: SHA256 → compress → encrypt → upload ────────────────────────
