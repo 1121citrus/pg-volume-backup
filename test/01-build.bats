@@ -24,6 +24,24 @@ setup() {
     [[ "${output}" == *"--cache CACHE_RULES"* ]]
 }
 
+@test "build --version requires a value" {
+    run "${BUILD}" --version
+    [ "$status" -eq 1 ]
+    [[ "${output}" == *"--version requires a value"* ]]
+}
+
+@test "build --platform requires a value" {
+    run "${BUILD}" --platform
+    [ "$status" -eq 1 ]
+    [[ "${output}" == *"--platform requires a value"* ]]
+}
+
+@test "build --registry requires a value" {
+    run "${BUILD}" --registry
+    [ "$status" -eq 1 ]
+    [[ "${output}" == *"--registry requires a value"* ]]
+}
+
 @test "build --advice scout enables Scout advisement stage" {
     local output
     output=$("${BUILD}" --advice scout --dry-run --no-lint --no-test --no-scan 2>&1)
@@ -170,4 +188,16 @@ setup() {
     output=$("${STAGING}" --help 2>&1)
     echo "output: ${output}"
     [[ "${output}" == *"--aws-credentials"* ]]
+}
+
+@test "test/staging --image requires a value" {
+    run "${STAGING}" --image
+    [ "$status" -eq 1 ]
+    [[ "${output}" == *"Option --image requires a value"* ]]
+}
+
+@test "test/staging --test requires a value" {
+    run "${STAGING}" --test
+    [ "$status" -eq 1 ]
+    [[ "${output}" == *"Option --test requires a value"* ]]
 }

@@ -553,18 +553,48 @@ run_tests() {
 # ---------------------------------------------------------------------------
 
 main() {
+    require_option_value() {
+        local option="$1"
+        local value="${2:-}"
+        if [[ -z "${value}" || "${value}" == --* ]]; then
+            echo "Option ${option} requires a value" >&2
+            echo "Run 'test/staging --help' for usage." >&2
+            exit 1
+        fi
+    }
+
     # ── Option parsing ────────────────────────────────────────────────────────
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --image)            IMAGE="$2";                shift ;;
-            --bucket)           AWS_S3_BUCKET_NAME="$2";  shift ;;
-            --aws-config)       AWS_CONFIG_FILE="$2";     shift ;;
-            --aws-credentials)  AWS_CREDENTIALS_FILE="$2"; shift ;;
+            --image)
+                require_option_value "$1" "${2:-}"
+                IMAGE="$2"
+                shift
+                ;;
+            --bucket)
+                require_option_value "$1" "${2:-}"
+                AWS_S3_BUCKET_NAME="$2"
+                shift
+                ;;
+            --aws-config)
+                require_option_value "$1" "${2:-}"
+                AWS_CONFIG_FILE="$2"
+                shift
+                ;;
+            --aws-credentials)
+                require_option_value "$1" "${2:-}"
+                AWS_CREDENTIALS_FILE="$2"
+                shift
+                ;;
             --scan)       _SCAN=true   ;;
             --no-scan)    _SCAN=false  ;;
             --yes)        _YES=true    ;;
             --skip-e2e)   _SKIP_E2E=true ;;
-            --test)       _ONLY_TEST="$2"; shift ;;
+            --test)
+                require_option_value "$1" "${2:-}"
+                _ONLY_TEST="$2"
+                shift
+                ;;
             -h|--help)    show_help; exit 0 ;;
             -*)
                 echo "Unknown option: $1" >&2

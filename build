@@ -219,15 +219,36 @@ reset_cache_db() {
         sh -c "rm -rf /cache/* && mkdir -p /cache"
 }
 
+require_option_value() {
+    local option="$1"
+    local value="${2:-}"
+    if [[ -z "${value}" || "${value}" == --* ]]; then
+        echo "${option} requires a value" >&2
+        exit 1
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --push)             PUSH=true ;;
-        --version)          VERSION="$2"; shift ;;
-        --platform)         PLATFORMS="$2"; shift ;;
-        --registry)         REGISTRY="$2"; shift ;;
+        --version)
+            require_option_value "$1" "${2:-}"
+            VERSION="$2"
+            shift
+            ;;
+        --platform)
+            require_option_value "$1" "${2:-}"
+            PLATFORMS="$2"
+            shift
+            ;;
+        --registry)
+            require_option_value "$1" "${2:-}"
+            REGISTRY="$2"
+            shift
+            ;;
         --no-sbom)          SBOM=false ;;
         --no-provenance)    PROVENANCE=false ;;
         --no-lint)          LINT=false ;;
