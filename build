@@ -8,7 +8,7 @@
 # SYNOPSIS
 #   build [--push] [--version VERSION] [--platform PLATFORMS]
 #         [--registry REGISTRY] [--no-sbom] [--no-provenance]
-#         [--no-lint] [--no-test] [--no-scan]
+#         [--no-lint] [--no-test] [--no-scan] [--no-coverage]
 #         [--advise [ADVISEMENTS]] [--advice [ADVISEMENTS]] [--no-advise]
 #         [--cache CACHE_RULES]
 #         [--dry-run] [--help]
@@ -32,11 +32,12 @@
 #   --no-scan           Skip the Trivy vulnerability scan (gating).
 #                       Also skips advisements (stage 5) by default; pass
 #                       --advise after --no-scan to keep the advisory scans.
+#   --no-coverage       Skip the kcov unit test coverage report (advisory).
 #   --advise [ADVISEMENTS]
 #                       Run advisory scans. Comma-delimited list:
-#                       'grype', 'scout', 'dive', 'all', 'none', or any
-#                       combination, e.g. 'grype,scout'. 'none' disables
-#                       all advisements (equivalent to --no-advise).
+#                       'coverage', 'grype', 'scout', 'dive', 'all', 'none',
+#                       or any combination, e.g. 'coverage,grype'. 'none'
+#                       disables all advisements (equivalent to --no-advise).
 #                       Default with no list given: 'grype,scout'.
 #                       Advisory scans are off by default.
 #   --advice [ADVISEMENTS]
@@ -53,7 +54,7 @@
 #   The following env-var overrides take precedence over the defaults above but
 #   are themselves overridden by the matching CLI flag:
 #     BUILD_VERSION, BUILD_PUSH, BUILD_PLATFORM, BUILD_REGISTRY
-#     BUILD_LINT, BUILD_TEST, BUILD_SCAN, BUILD_ADVISE
+#     BUILD_LINT, BUILD_TEST, BUILD_SCAN, BUILD_COVERAGE, BUILD_ADVISE
 #
 # PREREQUISITES
 #   • docker with the buildx plugin (≥ 0.10)
@@ -68,9 +69,10 @@
 #   3. Test   — ./test/run-all against the locally loaded image
 #   4. Scan   — Trivy CRITICAL/HIGH image scan (blocking)
 #   5. Advise — multiple advisory scans (advisory only; never blocks the build)
-#              a) Grype   — full-severity scan
-#              b) Scout   — Docker Scout CVE scan
-#              c) Dive    — image layer analysis
+#              a) Grype    — full-severity scan
+#              b) Scout    — Docker Scout CVE scan
+#              c) Dive     — image layer analysis
+#              d) Coverage — unit test coverage analysis (kcov)
 #   6. Push   — multi-platform rebuild + push to registry (only with --push)
 #
 # EXAMPLES
@@ -99,6 +101,7 @@ PROVENANCE=true
 LINT=${BUILD_LINT:-true}
 TEST=${BUILD_TEST:-true}
 SCAN=${BUILD_SCAN:-true}
+ADVISE_COVERAGE=${BUILD_COVERAGE:-false}
 ADVISE_GRYPE=false
 ADVISE_SCOUT=false
 ADVISE_DIVE=false
@@ -124,6 +127,8 @@ GRYPE_IMAGE=anchore/grype
 GRYPE_TAG=v0.87.0
 DIVE_IMAGE=wagoodman/dive
 DIVE_TAG=v0.13.1
+BATS_KCOV_IMAGE=1121citrus/bats-kcov
+BATS_KCOV_TAG=latest
 
 TRIVY_CACHE_VOLUME=pg-volume-backup-trivy-cache
 GRYPE_CACHE_VOLUME=pg-volume-backup-grype-cache
@@ -228,6 +233,7 @@ while [[ $# -gt 0 ]]; do
         --no-lint)          LINT=false ;;
         --no-test)          TEST=false ;;
         --no-scan)          SCAN=false ;;
+        --no-coverage)      ADVISE_COVERAGE=false ;;
         --advise|--advice)
             _ADVISE_EXPLICIT=true
             if [[ $# -gt 1 && ! "$2" =~ ^-- ]]; then
@@ -235,6 +241,7 @@ while [[ $# -gt 0 ]]; do
             else
                 advisements="grype,scout"
             fi
+            ADVISE_COVERAGE=false
             ADVISE_GRYPE=false
             ADVISE_SCOUT=false
             ADVISE_DIVE=false
@@ -243,16 +250,18 @@ while [[ $# -gt 0 ]]; do
                 adv="${adv//[[:space:]]/}"
                 adv="${adv,,}"
                 case "$adv" in
-                    grype)  ADVISE_GRYPE=true ;;
-                    scout)  ADVISE_SCOUT=true ;;
-                    dive)   ADVISE_DIVE=true ;;
-                    all)    ADVISE_GRYPE=true; ADVISE_SCOUT=true; ADVISE_DIVE=true ;;
-                    none)   ADVISE_GRYPE=false; ADVISE_SCOUT=false; ADVISE_DIVE=false ;;
-                    *)      echo "Unknown advisement: $adv" >&2; exit 1 ;;
+                    coverage) ADVISE_COVERAGE=true ;;
+                    grype)    ADVISE_GRYPE=true ;;
+                    scout)    ADVISE_SCOUT=true ;;
+                    dive)     ADVISE_DIVE=true ;;
+                    all)      ADVISE_COVERAGE=true; ADVISE_GRYPE=true; ADVISE_SCOUT=true; ADVISE_DIVE=true ;;
+                    none)     ADVISE_COVERAGE=false; ADVISE_GRYPE=false; ADVISE_SCOUT=false; ADVISE_DIVE=false ;;
+                    *)        echo "Unknown advisement: $adv" >&2; exit 1 ;;
                 esac
             done
             ;;
         --no-advise)
+            ADVISE_COVERAGE=false
             ADVISE_GRYPE=false
             ADVISE_SCOUT=false
             ADVISE_DIVE=false
@@ -280,6 +289,7 @@ done
 
 # --no-scan implies --no-advise unless --advise was given explicitly.
 if [[ "${SCAN}" == "false" && "${_ADVISE_EXPLICIT}" == "false" ]]; then
+    ADVISE_COVERAGE=false
     ADVISE_GRYPE=false
     ADVISE_SCOUT=false
     ADVISE_DIVE=false
@@ -521,6 +531,35 @@ if [[ "${ADVISE_DIVE}" == "true" ]]; then
             --ci \
             --ci-config /.dive-ci \
             "${full_image}:${VERSION}" || true
+fi
+
+# ---------------------------------------------------------------------------
+# Stage 5d: Coverage (kcov — advisory, never blocks)
+#
+# Reruns the bats suite through kcov to produce a per-file line-coverage
+# report for src/.  Uses 1121citrus/bats-kcov (kcov + bats + docker pre-bundled).
+# Requires SYS_PTRACE; works on macOS Docker Desktop with the flags below.
+# The Docker socket and IMAGE are forwarded so tests can invoke the built image.
+# ---------------------------------------------------------------------------
+if [[ "${ADVISE_COVERAGE}" == "true" ]]; then
+    echo "==> Stage 5d: Coverage" >&2
+    if [[ "${DRY_RUN}" == "true" ]]; then
+        echo "[DRY RUN] docker run --rm --cap-add SYS_PTRACE \\" >&2
+        echo "[DRY RUN]   --security-opt seccomp=unconfined \\" >&2
+        echo "[DRY RUN]   -v ${script_dir}:/code:ro -w /code \\" >&2
+        echo "[DRY RUN]   ${BATS_KCOV_IMAGE}:${BATS_KCOV_TAG} bats-coverage \\" >&2
+        echo "[DRY RUN]   test/00-coverage.bats" >&2
+    else
+        docker run --rm \
+            --cap-add SYS_PTRACE \
+            --security-opt seccomp=unconfined \
+            -v "${script_dir}:/code:ro" \
+            -w /code \
+            "${BATS_KCOV_IMAGE}:${BATS_KCOV_TAG}" \
+            bats-coverage \
+                test/00-coverage.bats \
+            >&2 || echo "    Coverage run failed (advisory only)" >&2
+    fi
 fi
 
 # ---------------------------------------------------------------------------
