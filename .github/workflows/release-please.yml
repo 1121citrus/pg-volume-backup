@@ -11,5 +11,5 @@ permissions:
 
 jobs:
   release-please:
-    uses: 1121citrus/shared-github-workflows/.github/workflows/release-please.yml@main
+    uses: 1121citrus/shared-github-workflows/.github/workflows/release-please.yml@7736674092013c10af60f105cc8b6bccb7571afa
     secrets: inherit
