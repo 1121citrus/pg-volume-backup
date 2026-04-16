@@ -198,8 +198,8 @@ fi
 # ── Phase 3: SHA256 → compress → encrypt → upload ────────────────────────
 compression="${COMPRESSION:-none}"
 cipher="${GPG_CIPHER_ALGO:-aes256}"
-aws_dry=""
-is_true "${AWS_DRYRUN:-false}" && aws_dry="--dryrun"
+aws_dry=()
+is_true "${AWS_DRYRUN:-false}" && aws_dry=("--dryrun")
 
 for i in "${!tar_files[@]}"; do
     tar_file="${tar_files[${i}]}"
@@ -286,11 +286,8 @@ for i in "${!tar_files[@]}"; do
     info "upload: ${s3_dir}/${archive_name}"
     info "upload: ${s3_dir}/${sha256_name}"
     if ! is_true "${DRYRUN}"; then
-        # aws_dry is intentionally word-split when non-empty.
-        # shellcheck disable=SC2086
-        aws s3 mv ${aws_dry} "${archive}" "${s3_dir}/${archive_name}"
-        # shellcheck disable=SC2086
-        aws s3 mv ${aws_dry} "${sha256_file}" "${s3_dir}/${sha256_name}"
+        aws s3 mv "${aws_dry[@]}" "${archive}" "${s3_dir}/${archive_name}"
+        aws s3 mv "${aws_dry[@]}" "${sha256_file}" "${s3_dir}/${sha256_name}"
     fi
 done
 
