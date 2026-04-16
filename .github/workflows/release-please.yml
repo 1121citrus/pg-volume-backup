@@ -2,7 +2,7 @@ name: Release Please
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
 
 # release-please-action needs write access to open release PRs and push tags.
 permissions:

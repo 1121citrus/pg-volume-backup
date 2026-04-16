@@ -13,7 +13,7 @@ publication for pg-volume-backup.
 | **Scan** | After build (parallel with test) | Trivy image scan — blocks push on fixable CVEs |
 | **Push** | Version tags and staging branch only | Multi-platform build and push to Docker Hub |
 | **Dependabot** | Weekly (Monday 06:00 UTC) | Keep GitHub Actions versions current |
-| **Release Please** | Push to main/master | Open release PR; create tag and GitHub Release |
+| **Release Please** | Push to main | Open release PR; create tag and GitHub Release |
 
 ## CI workflow (`ci.yml`)
 
