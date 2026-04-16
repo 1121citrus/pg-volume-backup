@@ -31,6 +31,7 @@ export AWS_SHARED_CREDENTIALS_FILE='$(__quote "${AWS_SHARED_CREDENTIALS_FILE:-/r
 export AWS_DRYRUN='$(__quote "${AWS_DRYRUN:-false}")'
 export AWS_S3_BUCKET_NAME='$(__quote "${AWS_S3_BUCKET_NAME:-}")'
 export BACKUP_HOSTNAME='$(__quote "${BACKUP_HOSTNAME:-}")'
+export BACKUP_ROOT='$(__quote "${BACKUP_ROOT:-/backup}")'
 export COMPRESSION='$(__quote "${COMPRESSION:-none}")'
 export CRON_EXPRESSION='$(__quote "${CRON_EXPRESSION:-@daily}")'
 export DB_FORMAT='$(__quote "${DB_FORMAT:-plain}")'
