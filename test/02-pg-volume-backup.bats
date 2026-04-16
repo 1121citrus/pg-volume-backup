@@ -127,3 +127,39 @@ teardown() {
         -v "${TEST_TMPDIR}:/backup:ro"
     [ "$status" -ne 0 ]
 }
+
+# ── Dry-run ───────────────────────────────────────────────────────────────────
+
+@test "--dry-run exits 0" {
+    run run_pg_volume_backup \
+        -e BACKUP_ROOT=/backup \
+        -v "${TEST_TMPDIR}:/backup:ro" \
+        --dry-run
+    [ "$status" -eq 0 ]
+}
+
+@test "--dry-run produces no output files" {
+    local outdir
+    outdir=$(mktemp -d)
+    chmod o+rwx "${outdir}"
+    run_pg_volume_backup \
+        -e BACKUP_ROOT=/backup \
+        -v "${TEST_TMPDIR}:/backup:ro" \
+        -v "${outdir}:/output" \
+        --dry-run > /dev/null
+    local found
+    found=$(find "${outdir}" -type f | head -1)
+    rm -rf "${outdir}"
+    echo "found: ${found}"
+    [[ -z "${found}" ]]
+}
+
+@test "--dry-run logs dry-run mode message" {
+    local output
+    output=$(run_pg_volume_backup \
+        -e BACKUP_ROOT=/backup \
+        -v "${TEST_TMPDIR}:/backup:ro" \
+        --dry-run 2>&1)
+    echo "output: ${output}"
+    [[ "${output}" == *"dry-run"* ]]
+}
