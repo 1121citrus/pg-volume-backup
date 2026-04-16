@@ -51,6 +51,10 @@ function info() {
     log INFO "${@:-}"
 }
 
+function warn() {
+    log WARN "${@:-}"
+}
+
 function is_true() {
     echo "${1:?Need argument}" | grep -Eiq '^\s*(1|true|t|yes|y)\s*$'
 }
