@@ -78,7 +78,7 @@ docker run --rm -i \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e "IMAGE=1121citrus/pg-volume-backup:latest" \
   --workdir "$PWD" --entrypoint sh bats/bats:1.13.0 \
-  -c "apk add --quiet --no-cache docker-cli >/dev/null 2>&1 && bats test"
+  -c "apk add --quiet --no-cache docker-cli gnupg >/dev/null 2>&1 && bats test"
 ```
 
 ---
@@ -157,6 +157,5 @@ On push/PR
 ### Configuration
 
 - `release-please-config.json` — release type and package root
-- `.release-please-manifest.json` — current version
 - `version.txt` — plain-text version file
 - `CHANGELOG.md` — generated/updated by release-please
