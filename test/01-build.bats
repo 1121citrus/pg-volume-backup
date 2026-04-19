@@ -42,11 +42,10 @@ setup() {
     [[ "${output}" == *"--registry requires a value"* ]]
 }
 
-@test "build --advice scout enables Scout advisement stage" {
+@test "build --advice scout is rejected (scout is gating)" {
     local output
-    output=$("${BUILD}" --advice scout --dry-run --no-lint --no-test --no-scan 2>&1)
-    echo "output: ${output}"
-    [[ "${output}" == *"Stage 5b: Advise (Scout)"* ]]
+    output=$("${BUILD}" --advice scout --dry-run --no-lint --no-test --no-scan 2>&1) || true
+    [[ "${output}" == *"Unknown advisement"* ]]
 }
 
 @test "build --advise Dive enables Dive advisement stage" {
@@ -99,12 +98,10 @@ setup() {
     [[ "${output}" != *"Stage 5d"* ]]
 }
 
-@test "build --advise scout,dive enables Scout and Dive" {
+@test "build --advise scout,dive is rejected (scout is gating)" {
     run "${BUILD}" --advise scout,dive --dry-run --no-lint --no-test --no-scan
-    [ "$status" -eq 0 ]
-    [[ "${output}" == *"Stage 5b: Advise (Scout)"* ]]
-    [[ "${output}" == *"Stage 5c: Advise (Dive)"* ]]
-    [[ "${output}" != *"Stage 5d"* ]]
+    [ "$status" -eq 1 ]
+    [[ "${output}" == *"Unknown advisement"* ]]
 }
 
 @test "build --advise rejects unknown advisement" {
@@ -129,19 +126,19 @@ setup() {
     [[ "${output}" == *"Stage 5d: Coverage"* ]]
 }
 
-@test "build --no-coverage disables Coverage stage" {
-    run "${BUILD}" --advise all --no-coverage --dry-run --no-lint --no-test --no-scan
+@test "build --advise none disables Coverage stage" {
+    run "${BUILD}" --advise all --advise none --dry-run --no-lint --no-test --no-scan
     [ "$status" -eq 0 ]
     [[ "${output}" != *"Stage 5d"* ]]
 }
 
-@test "build --advise all enables all advisements including Coverage" {
+@test "build --advise all enables Dive and Coverage (scout and grype are gating)" {
     run "${BUILD}" --advise all --dry-run --no-lint --no-test --no-scan
     [ "$status" -eq 0 ]
-    [[ "${output}" == *"Stage 5a: Advise (Grype)"* ]]
-    [[ "${output}" == *"Stage 5b: Advise (Scout)"* ]]
     [[ "${output}" == *"Stage 5c: Advise (Dive)"* ]]
     [[ "${output}" == *"Stage 5d: Coverage"* ]]
+    [[ "${output}" != *"Stage 5a: Advise (Grype)"* ]]
+    [[ "${output}" != *"Stage 5b: Advise (Scout)"* ]]
 }
 
 @test "build --cache reset=all resets Trivy DB" {
