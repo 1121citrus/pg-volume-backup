@@ -2,8 +2,8 @@
 # shellcheck shell=bash
 
 # -- GENERATED -- do not edit directly.
-# Template: src/build/generate @ 167cac9
-# Generated: 2026-04-19T22:41:13Z
+# Template: src/build/generate @ f4d686d
+# Generated: 2026-04-20T21:07:47Z
 # Regenerate: bin/build-generate pg-volume-backup
 
 # build — local CI equivalent for pg-volume-backup.
@@ -113,9 +113,9 @@ set -euo pipefail
 
 # -- GENERATED metadata (informational; enforcement is in CI) --
 # shellcheck disable=SC2034
-GENERATED_AT="2026-04-19T22:41:13Z"
+GENERATED_AT="2026-04-20T21:07:47Z"
 # shellcheck disable=SC2034
-GENERATED_FROM_SHA="167cac9"
+GENERATED_FROM_SHA="f4d686d"
 
 # ---------------------------------------------------------------------------
 # Defaults — may be overridden by environment variables or CLI flags.
@@ -359,7 +359,7 @@ _timed() {
     local _watcher=$!
     wait "${_pid}" 2>/dev/null; local _rc=$?
     kill "${_watcher}" 2>/dev/null
-    wait "${_watcher}" 2>/dev/null
+    wait "${_watcher}" 2>/dev/null || true
     return "${_rc}"
 }
 
@@ -695,7 +695,7 @@ if [[ "${SCAN_GRYPE}" == "true" ]]; then
             _grype_vol=(-v "${script_dir}/.grype.yaml:/.grype.yaml:ro")
             _grype_cfg=(--config /.grype.yaml)
         fi
-        _timed 300 docker run --rm \
+        _timed 600 docker run --rm \
             -v "${_scan_tar}:/scan.tar:ro" \
             -e "GRYPE_DB_CACHE_DIR=${GRYPE_DB_CACHE_DIR}" \
             -v "${GRYPE_CACHE_VOLUME}:${GRYPE_DB_CACHE_DIR}" \
