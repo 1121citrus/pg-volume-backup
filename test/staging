@@ -37,7 +37,9 @@
 #                             (env: STAGING_SCAN; default: true)
 #   --no-scan                 Skip Trivy scan
 #   --yes                     Skip the confirmation prompt
-#   --skip-e2e                Skip test_staging_backup_e2e
+#   --skip-e2e                Skip test_staging_backup_e2e and
+#                             test_staging_cron_backup_e2e
+#   --skip-cron               Skip all cron service-mode tests
 #   --test TEST               Run only the named test function
 #   -h, --help                Print this message and exit
 #
@@ -59,7 +61,7 @@
 #   # Quick iteration — skip Trivy scan:
 #   test/staging --no-scan 1121citrus/pg-volume-backup:latest
 #
-#   # Full test suite (creates a transient bucket; no production bucket needed):
+#   # Full suite (creates a transient bucket; no production bucket needed):
 #   test/staging \
 #       --aws-config ~/.secrets/aws-config \
 #       1121citrus/pg-volume-backup:latest
@@ -73,6 +75,10 @@
 #
 #   # Skip e2e test when credentials lack s3:CreateBucket:
 #   test/staging --skip-e2e 1121citrus/pg-volume-backup:latest
+#
+#   # Skip cron service-mode tests (avoids the 90s cron-fire wait):
+#   test/staging --no-scan --skip-cron \
+#       1121citrus/pg-volume-backup:latest
 
 set -euo pipefail
 
@@ -85,6 +91,7 @@ AWS_CONFIG_FILE="${AWS_CONFIG_FILE:-}"
 AWS_CREDENTIALS_FILE="${AWS_CREDENTIALS_FILE:-}"
 _YES=false
 _SKIP_E2E=false
+_SKIP_CRON=false
 _ONLY_TEST=""
 _SCAN="${STAGING_SCAN:-true}"
 
@@ -338,8 +345,255 @@ test_staging_dryrun() {
     fi
 }
 
+# ── Cron service-mode tests ───────────────────────────────────────────────────
+# These tests start the container via its CMD (/usr/local/bin/startup) and
+# exercise the async service path: startup → crond → backup →
+# pg-volume-backup.  Two of the three tests wait up to 90s for the first
+# cron tick; use --skip-cron when fast iteration matters more than coverage.
+
+# test_staging_cron_startup: service mode initializes correctly.
+#
+# Starts the container with the default @daily schedule so no backup fires
+# during the test.  Verifies that startup writes the env file, installs the
+# crontab, starts crond, and that the healthcheck probe returns 0.
+test_staging_cron_startup() {
+    local cid result=0
+    # shellcheck disable=SC2086
+    cid=$(docker run --detach \
+        -e "AWS_S3_BUCKET_NAME=test-bucket" \
+        -e "BACKUP_ROOT=/backup" \
+        -e "CRON_EXPRESSION=@daily" \
+        ${DOCKER_RUN_ARGS:-} \
+        "${IMAGE}" 2>&1) || result=$?
+    if [[ ${result} -ne 0 ]]; then
+        echo "FAIL '${FUNCNAME[0]}': could not start container" \
+             "(exit=${result})"
+        return 1
+    fi
+    # Use rm -f so cleanup works whether the container is running or exited.
+    # shellcheck disable=SC2064
+    trap "docker rm -f '${cid}' > /dev/null 2>&1 || true" RETURN
+
+    # Allow startup to complete before probing.
+    sleep 3
+
+    # Check that the container is still running; a quick exit means startup
+    # failed — report the logs and bail rather than misreporting as a
+    # healthcheck failure.
+    local running
+    running=$(docker inspect \
+        --format '{{.State.Running}}' "${cid}" 2>/dev/null \
+        || echo "false")
+    if [[ "${running}" != "true" ]]; then
+        local logs
+        logs=$(docker logs "${cid}" 2>&1 \
+            || echo "(no logs — container already removed)")
+        echo "FAIL '${FUNCNAME[0]}': container exited during startup"
+        printf '  -- container logs --\n' >&2
+        printf '%s\n' "${logs}" >&2
+        return 1
+    fi
+
+    local hc_result=0
+    docker exec "${cid}" /usr/local/bin/healthcheck \
+        > /dev/null 2>&1 || hc_result=$?
+    if [[ ${hc_result} -eq 0 ]]; then
+        echo "PASS '${FUNCNAME[0]}': service mode started;" \
+             "healthcheck passes"
+    else
+        local logs
+        logs=$(docker logs "${cid}" 2>&1)
+        echo "FAIL '${FUNCNAME[0]}': healthcheck failed" \
+             "(exit=${hc_result})"
+        printf '  -- container logs --\n' >&2
+        printf '%s\n' "${logs}" >&2
+        return 1
+    fi
+}
+
+# test_staging_cron_dryrun: cron fires backup in service mode.
+#
+# Overrides COMMAND to invoke pg-volume-backup with --dry-run so no S3
+# calls are made and no credentials are needed.  Sets CRON_EXPRESSION to
+# every minute and polls container logs for the pg-volume-backup finish
+# line, with a 90s timeout.
+test_staging_cron_dryrun() {
+    local tmpdir result=0
+    tmpdir=$(mktemp -d /tmp/staging-cron-XXXXXX)
+    mkdir -p "${tmpdir}/uploads"
+    echo "test file" > "${tmpdir}/uploads/document.pdf"
+    chmod -R o+rx "${tmpdir}"
+
+    local cid
+    # shellcheck disable=SC2086
+    cid=$(docker run --detach \
+        -e "AWS_S3_BUCKET_NAME=test-bucket" \
+        -e "BACKUP_ROOT=/backup" \
+        -e "BACKUP_HOSTNAME=staging-cron-test" \
+        -e "CRON_EXPRESSION=* * * * *" \
+        -e "COMMAND=/usr/local/bin/pg-volume-backup --dry-run" \
+        -v "${tmpdir}:/backup:ro" \
+        ${DOCKER_RUN_ARGS:-} \
+        "${IMAGE}" 2>&1) || result=$?
+    rm -rf "${tmpdir}"
+
+    if [[ ${result} -ne 0 ]]; then
+        echo "FAIL '${FUNCNAME[0]}': could not start container" \
+             "(exit=${result})"
+        return 1
+    fi
+    # shellcheck disable=SC2064
+    trap "docker rm -f '${cid}' > /dev/null 2>&1 || true" RETURN
+
+    # Poll every 5s for up to 90s for evidence the backup completed.
+    local fired=false elapsed=0
+    while [[ ${elapsed} -lt 90 ]]; do
+        sleep 5
+        elapsed=$(( elapsed + 5 ))
+        if docker logs "${cid}" 2>&1 \
+                | grep -q '\[INFO\].*finish pg-volume-backup'; then
+            fired=true
+            break
+        fi
+    done
+
+    if "${fired}"; then
+        echo "PASS '${FUNCNAME[0]}': cron fired backup in service" \
+             "mode (dry-run)"
+    else
+        local logs
+        logs=$(docker logs "${cid}" 2>&1)
+        echo "FAIL '${FUNCNAME[0]}': cron did not fire within 90s"
+        printf '  -- container logs --\n' >&2
+        printf '%s\n' "${logs}" >&2
+        return 1
+    fi
+}
+
+# test_staging_cron_backup_e2e: end-to-end backup correctness via cron.
+#
+# Mirrors test_staging_backup_e2e but exercises the async service path
+# (startup → crond → backup → pg-volume-backup) instead of direct CLI
+# invocation.  Creates a disposable bucket, starts the container in service
+# mode with a 1-minute schedule, waits up to 90s for the first cron tick,
+# then verifies 4 S3 objects (2 archives + 2 checksums for 2 volumes).
+#
+# Required IAM permissions (on test.pg-volume-backup-*):
+#   s3:CreateBucket, s3:DeleteBucket, s3:PutObject, s3:GetObject,
+#   s3:ListBucket, s3:DeleteObject
+test_staging_cron_backup_e2e() {
+    _aws_available || {
+        _skip "AWS credentials not configured"
+        return 0
+    }
+
+    local epoch test_bucket tmpdir
+    epoch=$(date +%s)
+    test_bucket="test.pg-volume-backup-${epoch}"
+    tmpdir=$(mktemp -d /tmp/staging-cron-e2e-XXXXXX)
+
+    # Always remove the transient bucket and temp dir on return.
+    # shellcheck disable=SC2064
+    trap "
+        _aws s3 rb 's3://${test_bucket}' --force > /dev/null 2>&1 || true
+        rm -rf '${tmpdir}'
+    " RETURN
+
+    printf '  creating transient test bucket s3://%s...\n' \
+        "${test_bucket}" >&2
+    _aws s3 mb "s3://${test_bucket}" > /dev/null 2>&1 || {
+        echo "FAIL '${FUNCNAME[0]}': could not create bucket" \
+             "(check s3:CreateBucket on test.pg-volume-backup-*)"
+        return 1
+    }
+
+    mkdir -p "${tmpdir}/uploads" "${tmpdir}/data"
+    echo "fake-pdf-content" > "${tmpdir}/uploads/document.pdf"
+    echo "fake-data"        > "${tmpdir}/data/file.dat"
+    chmod -R o+rx "${tmpdir}"
+
+    local aws_mounts=()
+    [[ -r "${_aws_cfg_mount}" ]] && \
+        aws_mounts+=(
+            -v "${_aws_cfg_mount}:/run/secrets/aws-config:ro"
+            -e "AWS_CONFIG_FILE=/run/secrets/aws-config"
+        )
+    [[ -r "${_aws_creds_mount}" ]] && \
+        aws_mounts+=(
+            -v "${_aws_creds_mount}:/run/secrets/aws-credentials:ro"
+            -e "AWS_SHARED_CREDENTIALS_FILE=/run/secrets/aws-credentials"
+        )
+
+    printf '  starting service container (cron every minute)...\n' >&2
+    local cid cid_result=0
+    # shellcheck disable=SC2086
+    cid=$(docker run --detach \
+        -e "AWS_S3_BUCKET_NAME=${test_bucket}" \
+        -e "BACKUP_ROOT=/backup" \
+        -e "BACKUP_HOSTNAME=staging-cron-test" \
+        -e "CRON_EXPRESSION=* * * * *" \
+        -e "COMPRESSION=none" \
+        -v "${tmpdir}:/backup:ro" \
+        "${aws_mounts[@]}" \
+        ${DOCKER_RUN_ARGS:-} \
+        "${IMAGE}" 2>&1) || cid_result=$?
+    if [[ ${cid_result} -ne 0 ]]; then
+        echo "FAIL '${FUNCNAME[0]}': could not start container" \
+             "(exit=${cid_result})"
+        return 1
+    fi
+
+    # Extend the RETURN trap to also remove the container.
+    # shellcheck disable=SC2064
+    trap "
+        docker rm -f '${cid}' > /dev/null 2>&1 || true
+        _aws s3 rb 's3://${test_bucket}' --force > /dev/null 2>&1 || true
+        rm -rf '${tmpdir}'
+    " RETURN
+
+    # Poll every 5s for up to 90s for a completed backup.
+    printf '  waiting for first cron tick (up to 90s)...\n' >&2
+    local fired=false elapsed=0
+    while [[ ${elapsed} -lt 90 ]]; do
+        sleep 5
+        elapsed=$(( elapsed + 5 ))
+        if docker logs "${cid}" 2>&1 \
+                | grep -q '\[INFO\].*finish backup'; then
+            fired=true
+            break
+        fi
+    done
+
+    if ! "${fired}"; then
+        local logs
+        logs=$(docker logs "${cid}" 2>&1)
+        echo "FAIL '${FUNCNAME[0]}': cron did not fire within 90s"
+        printf '  -- container logs --\n' >&2
+        printf '%s\n' "${logs}" >&2
+        return 1
+    fi
+
+    # Verify object count: 2 volumes × 2 objects = 4 total.
+    local count=0
+    count=$(_aws s3 ls --recursive "s3://${test_bucket}/" \
+                2>/dev/null | wc -l | tr -d ' ')
+
+    if [[ "${count}" -eq 4 ]]; then
+        echo "PASS '${FUNCNAME[0]}': ${count} objects in S3 after" \
+             "cron backup (2 archives + 2 checksums for 2 volumes)"
+    else
+        local bk_logs
+        bk_logs=$(docker logs "${cid}" 2>&1)
+        echo "FAIL '${FUNCNAME[0]}': ${count} objects in S3 (expected 4)"
+        printf 'Objects in bucket:\n' >&2
+        _aws s3 ls --recursive "s3://${test_bucket}/" >&2 2>&1 || true
+        printf 'Container logs:\n' >&2
+        printf '%s\n' "${bk_logs}" >&2
+        return 1
+    fi
+}
+
 # ── AWS-dependent tests ───────────────────────────────────────────────────────
-# Each test skips when AWS credentials are absent.
 
 # test_staging_backup_e2e: end-to-end backup correctness test.
 #
@@ -489,10 +743,13 @@ run_tests() {
         test_staging_no_bucket
         test_staging_no_volumes
         test_staging_dryrun
+        test_staging_cron_startup
+        test_staging_cron_dryrun
         test_staging_backup_e2e
+        test_staging_cron_backup_e2e
     )
 
-    # Apply --test and --skip-e2e filters.
+    # Apply --test, --skip-e2e, and --skip-cron filters.
     local tests=()
     if [[ -n "${_ONLY_TEST}" ]]; then
         local valid=false t
@@ -510,6 +767,12 @@ run_tests() {
         for t in "${all_tests[@]}"; do
             [[ "${t}" == "test_staging_backup_e2e" \
                 && "${_SKIP_E2E}" == "true" ]] && continue
+            [[ "${t}" == "test_staging_cron_backup_e2e" \
+                && ("${_SKIP_E2E}" == "true" \
+                    || "${_SKIP_CRON}" == "true") ]] && continue
+            [[ ("${t}" == "test_staging_cron_startup" \
+                || "${t}" == "test_staging_cron_dryrun") \
+                && "${_SKIP_CRON}" == "true" ]] && continue
             tests+=("${t}")
         done
     fi
@@ -526,6 +789,7 @@ run_tests() {
     fi
     [[ -n "${_ONLY_TEST}" ]]  && echo "Filter: --test ${_ONLY_TEST}"
     "${_SKIP_E2E}"            && echo "Filter: --skip-e2e"
+    "${_SKIP_CRON}"           && echo "Filter: --skip-cron"
     echo "Scan:   ${_SCAN} (Trivy HIGH/CRITICAL)"
     echo "================================================="
 
@@ -590,6 +854,7 @@ main() {
             --no-scan)    _SCAN=false  ;;
             --yes)        _YES=true    ;;
             --skip-e2e)   _SKIP_E2E=true ;;
+            --skip-cron)  _SKIP_CRON=true ;;
             --test)
                 require_option_value "$1" "${2:-}"
                 _ONLY_TEST="$2"
@@ -614,7 +879,7 @@ main() {
 
     # Propagate resolved values so setup() and test functions see them.
     export IMAGE AWS_S3_BUCKET_NAME AWS_CONFIG_FILE AWS_CREDENTIALS_FILE
-    export _YES _SKIP_E2E _ONLY_TEST _SCAN
+    export _YES _SKIP_E2E _SKIP_CRON _ONLY_TEST _SCAN
 
     # ── Preflight summary ────────────────────────────────────────────────────
     local aws_cfg="${AWS_CONFIG_FILE:-${HOME}/.secrets/aws-config}"
@@ -633,6 +898,12 @@ main() {
         echo "  Scan:     Trivy HIGH/CRITICAL (--no-scan to skip)"
     else
         echo "  Scan:     skipped (--no-scan)"
+    fi
+    if "${_SKIP_CRON}"; then
+        echo "  Cron:     skipped (--skip-cron)"
+    else
+        echo "  Cron:     enabled (cron tests wait up to 90s;" \
+             "--skip-cron to skip)"
     fi
     echo ""
 

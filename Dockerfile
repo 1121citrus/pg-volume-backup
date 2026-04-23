@@ -66,7 +66,9 @@ RUN set -Eeux; \
         /home/pg-volume-backup/.gnupg && \
     install -m 0600 -o pg-volume-backup /dev/null \
         /home/pg-volume-backup/.gnupg/pubring.kbx && \
-    install -d -m 0755 -o pg-volume-backup /var/spool/cron/crontabs && \
+    mkdir -p /var/spool/cron/crontabs && \
+    chown pg-volume-backup /var/spool/cron/crontabs && \
+    chmod 0755 /var/spool/cron/crontabs && \
     mkdir -pv /usr/local/include/bash && \
     ln -sf /usr/local/bin/common-functions \
         /usr/local/include/bash/common-functions && \
