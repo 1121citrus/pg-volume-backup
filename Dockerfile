@@ -17,6 +17,24 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+# Global ARGs — available to all FROM directives.
+# renovate: datasource=github-releases depName=aptible/supercronic
+ARG SUPERCRONIC_VERSION=v0.2.44
+
+# ── Supercronic build stage ────────────────────────────────────────────────
+# Builds supercronic from source with Go 1.26.2, which patches:
+#   CVE-2026-32280 (crypto/x509 DoS) HIGH
+#   CVE-2026-32281 (crypto/x509 DoS) HIGH
+#   CVE-2026-32283 (TLS key update DoS) HIGH
+#   CVE-2026-33810 (crypto/x509 cert validation bypass) HIGH
+# Remove this stage and restore the wget installation once an upstream
+# supercronic release ships with Go >= 1.26.2 (or >= 1.25.9).
+FROM golang:1.26.2-alpine AS supercronic-builder
+ARG SUPERCRONIC_VERSION
+RUN CGO_ENABLED=0 go install github.com/aptible/supercronic@${SUPERCRONIC_VERSION}
+
+# ── Final image ────────────────────────────────────────────────────────────
+
 # Pin the Alpine minor version so Dependabot can track base-image updates
 # and bumps are explicit, reviewable changes rather than silent upgrades.
 FROM alpine:3.22
@@ -25,7 +43,7 @@ ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 ARG BUILD_DATE=unknown
 ARG UID=10001
-ARG SUPERCRONIC_VERSION=v0.2.44
+ARG SUPERCRONIC_VERSION
 
 # OCI image annotations (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 LABEL org.opencontainers.image.title="pg-volume-backup" \
@@ -39,8 +57,12 @@ LABEL org.opencontainers.image.title="pg-volume-backup" \
       org.opencontainers.image.revision="${GIT_COMMIT}" \
       org.opencontainers.image.created="${BUILD_DATE}"
 
+# Install supercronic built with Go 1.26.2 (patches CVE-2026-32280,
+# CVE-2026-32281, CVE-2026-32283, CVE-2026-33810 via Go stdlib upgrade).
+COPY --from=supercronic-builder --chmod=755 /go/bin/supercronic /usr/local/bin/
+
 # Install required utilities and configure environment.
-# hadolint ignore=DL3018,DL4006,SC2261,SC3041,DL3059
+# hadolint ignore=DL3018,SC2261,SC3041,DL3059
 RUN set -Eeux; \
     apk update && \
     apk upgrade --no-cache --no-interactive && \
@@ -60,13 +82,6 @@ RUN set -Eeux; \
         'xz>5.6' \
         'zip>3.0' \
         && \
-    echo "[INFO] installing supercronic ${SUPERCRONIC_VERSION}" \
-    && SUPERCRONIC_ARCH="$(uname -m \
-            | sed 's/x86_64/amd64/;s/aarch64/arm64/')" \
-    && wget -qO /usr/local/bin/supercronic \
-            "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-linux-${SUPERCRONIC_ARCH}" \
-    && chmod 0755 /usr/local/bin/supercronic \
-    && \
     adduser \
         --disabled-password --gecos "" --shell "/sbin/nologin" \
         --uid "${UID}" pg-volume-backup && \
