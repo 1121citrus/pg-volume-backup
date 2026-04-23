@@ -85,7 +85,7 @@ setup() {
     # Write a crontab for healthcheck tests that look for the default COMMAND.
     local _user
     _user=$(id -un)
-    printf '%s\n' "@daily /usr/local/bin/backup 2>&1" \
+    printf '%s\n' "@daily /usr/local/bin/backup >> /proc/1/fd/1 2>&1" \
         > "/var/spool/cron/crontabs/${_user}"
 
     export PATH="${STUB_DIR}:${PATH}"

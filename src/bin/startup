@@ -61,7 +61,7 @@ source "${ENV}"
 COMMAND="${COMMAND:-/usr/local/bin/backup}"
 info "installing cron.d entry: ${COMMAND}"
 _crontab="/var/spool/cron/crontabs/$(id -un)"
-printf '%s\n' "${CRON_EXPRESSION} ${COMMAND} 2>&1" > "${_crontab}"
+printf '%s\n' "${CRON_EXPRESSION} ${COMMAND} >> /proc/1/fd/1 2>&1" > "${_crontab}"
 chmod -c 0600 "${_crontab}" | info
 info "crontab: $(cat "${_crontab}")"
 
