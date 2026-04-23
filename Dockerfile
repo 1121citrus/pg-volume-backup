@@ -25,6 +25,7 @@ ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 ARG BUILD_DATE=unknown
 ARG UID=10001
+ARG SUPERCRONIC_VERSION=v0.2.44
 
 # OCI image annotations (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 LABEL org.opencontainers.image.title="pg-volume-backup" \
@@ -39,7 +40,7 @@ LABEL org.opencontainers.image.title="pg-volume-backup" \
       org.opencontainers.image.created="${BUILD_DATE}"
 
 # Install required utilities and configure environment.
-# hadolint ignore=DL3018,SC2261,SC3041,DL3059
+# hadolint ignore=DL3018,DL4006,SC2261,SC3041,DL3059
 RUN set -Eeux; \
     apk update && \
     apk upgrade --no-cache --no-interactive && \
@@ -59,6 +60,13 @@ RUN set -Eeux; \
         'xz>5.6' \
         'zip>3.0' \
         && \
+    echo "[INFO] installing supercronic ${SUPERCRONIC_VERSION}" \
+    && SUPERCRONIC_ARCH="$(uname -m \
+            | sed 's/x86_64/amd64/;s/aarch64/arm64/')" \
+    && wget -qO /usr/local/bin/supercronic \
+            "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-linux-${SUPERCRONIC_ARCH}" \
+    && chmod 0755 /usr/local/bin/supercronic \
+    && \
     adduser \
         --disabled-password --gecos "" --shell "/sbin/nologin" \
         --uid "${UID}" pg-volume-backup && \
@@ -66,9 +74,8 @@ RUN set -Eeux; \
         /home/pg-volume-backup/.gnupg && \
     install -m 0600 -o pg-volume-backup /dev/null \
         /home/pg-volume-backup/.gnupg/pubring.kbx && \
-    mkdir -p /var/spool/cron/crontabs && \
-    chown pg-volume-backup /var/spool/cron/crontabs && \
-    chmod 0755 /var/spool/cron/crontabs && \
+    rm -f /var/spool/cron/crontabs && \
+    install -d -m 0755 -o pg-volume-backup /var/spool/cron/crontabs && \
     mkdir -pv /usr/local/include/bash && \
     ln -sf /usr/local/bin/common-functions \
         /usr/local/include/bash/common-functions && \

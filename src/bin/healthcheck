@@ -11,14 +11,14 @@ ENV="${ENV:-${HOME:-/root}/.env}"
 COMMAND="${COMMAND:-/usr/local/bin/backup}"
 
 crond_running=false
-if pidof crond > /dev/null 2>&1; then
+if pidof supercronic > /dev/null 2>&1; then
     crond_running=true
-elif pgrep -x crond > /dev/null 2>&1; then
+elif pgrep -x supercronic > /dev/null 2>&1; then
     crond_running=true
 fi
 
 if ! "${crond_running}"; then
-    echo "healthcheck: crond is not running" >&2
+    echo "healthcheck: supercronic is not running" >&2
     exit 1
 fi
 

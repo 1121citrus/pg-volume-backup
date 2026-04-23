@@ -59,25 +59,25 @@ setup() {
         > "${STUB_DIR}/pg_dump"
     chmod +x "${STUB_DIR}/pg_dump"
 
-    # crond stub: exits 0 immediately (startup exec-replaces with it).
+    # crond is no longer used; supercronic stub exits 0 immediately.
     printf '%s\n' \
         '#!/usr/bin/env bash' \
         'exit 0' \
-        > "${STUB_DIR}/crond"
-    chmod +x "${STUB_DIR}/crond"
+        > "${STUB_DIR}/supercronic"
+    chmod +x "${STUB_DIR}/supercronic"
 
-    # pidof stub: succeeds only when asked for "crond".
+    # pidof stub: succeeds only when asked for "supercronic".
     printf '%s\n' \
         '#!/usr/bin/env bash' \
-        '[[ "${1:-}" == "crond" ]] && exit 0' \
+        '[[ "${1:-}" == "supercronic" ]] && exit 0' \
         'exit 1' \
         > "${STUB_DIR}/pidof"
     chmod +x "${STUB_DIR}/pidof"
 
-    # pgrep stub: succeeds for "pgrep -x crond".
+    # pgrep stub: succeeds for "pgrep -x supercronic".
     printf '%s\n' \
         '#!/usr/bin/env bash' \
-        '[[ "${1:-}" == "-x" && "${2:-}" == "crond" ]] && exit 0' \
+        '[[ "${1:-}" == "-x" && "${2:-}" == "supercronic" ]] && exit 0' \
         'exit 1' \
         > "${STUB_DIR}/pgrep"
     chmod +x "${STUB_DIR}/pgrep"
@@ -85,7 +85,7 @@ setup() {
     # Write a crontab for healthcheck tests that look for the default COMMAND.
     local _user
     _user=$(id -un)
-    printf '%s\n' "@daily /usr/local/bin/backup >> /proc/1/fd/1 2>&1" \
+    printf '%s\n' "@daily /usr/local/bin/backup 2>&1" \
         > "/var/spool/cron/crontabs/${_user}"
 
     export PATH="${STUB_DIR}:${PATH}"
@@ -312,12 +312,12 @@ teardown() {
 
 # ── healthcheck ───────────────────────────────────────────────────────────────
 
-@test "healthcheck: exits 0 when crond running and crontab correct" {
+@test "healthcheck: exits 0 when supercronic running and crontab correct" {
     run bash "${REPO_ROOT}/src/bin/healthcheck"
     [ "$status" -eq 0 ]
 }
 
-@test "healthcheck: exits 1 when crond is not running" {
+@test "healthcheck: exits 1 when supercronic is not running" {
     # Override stubs so pidof and pgrep both exit 1.
     printf '%s\n' '#!/usr/bin/env bash' 'exit 1' \
         > "${STUB_DIR}/pidof"
@@ -325,7 +325,7 @@ teardown() {
         > "${STUB_DIR}/pgrep"
     run bash "${REPO_ROOT}/src/bin/healthcheck"
     [ "$status" -eq 1 ]
-    [[ "${output}" == *"crond is not running"* ]]
+    [[ "${output}" == *"supercronic is not running"* ]]
 }
 
 @test "healthcheck: exits 1 when crontab does not contain COMMAND" {
