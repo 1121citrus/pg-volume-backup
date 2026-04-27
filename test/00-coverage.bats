@@ -82,6 +82,31 @@ setup() {
         > "${STUB_DIR}/pgrep"
     chmod +x "${STUB_DIR}/pgrep"
 
+    # Compression stubs: simulate in-place compression by renaming.
+    printf '%s\n' '#!/usr/bin/env bash' '[[ -f "$1" ]] && mv "$1" "${1}.bz2"' \
+        > "${STUB_DIR}/bzip2"; chmod +x "${STUB_DIR}/bzip2"
+    printf '%s\n' '#!/usr/bin/env bash' '[[ -f "$1" ]] && mv "$1" "${1}.gz"' \
+        > "${STUB_DIR}/gzip"; chmod +x "${STUB_DIR}/gzip"
+    printf '%s\n' '#!/usr/bin/env bash' '[[ -f "$1" ]] && mv "$1" "${1}.xz"' \
+        > "${STUB_DIR}/xz"; chmod +x "${STUB_DIR}/xz"
+    printf '%s\n' '#!/usr/bin/env bash' '[[ -f "$1" ]] && mv "$1" "${1}.gz"' \
+        > "${STUB_DIR}/pigz"; chmod +x "${STUB_DIR}/pigz"
+    printf '%s\n' '#!/usr/bin/env bash' '[[ -f "$1" ]] && cp "$1" "${1}.lzo"' \
+        > "${STUB_DIR}/lzop"; chmod +x "${STUB_DIR}/lzop"
+
+    # gpg stub: copy input archive to the --output path; consume stdin.
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'output="" args=()' \
+        'while [[ $# -gt 0 ]]; do' \
+        '    case "${1}" in --output) output="$2"; shift ;; --*) ;; *) args+=("$1") ;; esac' \
+        '    shift' \
+        'done' \
+        'cat > /dev/null' \
+        '[[ -n "${output}" && ${#args[@]} -gt 0 && -f "${args[-1]}" ]] && cp "${args[-1]}" "${output}"' \
+        > "${STUB_DIR}/gpg"
+    chmod +x "${STUB_DIR}/gpg"
+
     # Write a crontab for healthcheck tests that look for the default COMMAND.
     local _user
     _user=$(id -un)
@@ -352,4 +377,93 @@ teardown() {
     echo "output: ${output}"
     [[ "${output}" == *"begin backup"* ]]
     [[ "${output}" == *"finish backup"* ]]
+}
+
+# ── pg-volume-backup extended coverage ───────────────────────────────────────
+
+@test "pg-volume-backup: DB_VOLUME non-dry-run pg_dump completes" {
+    # Exercises the pg_dump live-run path (lines 164-176).
+    mkdir -p "${BACKUP_ROOT}/dbvol"
+    run env DB_VOLUME=dbvol DB_HOST=dbhost DB_NAME=mydb DB_USER=myuser \
+        bash "${REPO_ROOT}/src/bin/pg-volume-backup"
+    [ "$status" -eq 0 ]
+}
+
+@test "pg-volume-backup: DB_VOLUME custom format dry-run" {
+    # Exercises the custom-format branch (dump_file = .pgdump, lines 160-162).
+    mkdir -p "${BACKUP_ROOT}/dbvol"
+    local output
+    output=$(env DB_VOLUME=dbvol DB_HOST=dbhost DB_NAME=mydb DB_USER=myuser \
+        DB_FORMAT=custom \
+        bash "${REPO_ROOT}/src/bin/pg-volume-backup" --dry-run 2>&1)
+    echo "output: ${output}"
+    [[ "${output}" == *"pg_dump"* ]]
+}
+
+@test "pg-volume-backup: restarts containers after successful backup" {
+    # Exercises Phase 2 restart path (lines 209-218) on a successful run.
+    local docker_log="${TEST_TMPDIR}/docker-success.log"
+    printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'log="${DOCKER_STUB_LOG:?Need DOCKER_STUB_LOG}"' \
+        'case "${1:-}" in' \
+        '    ps) printf "%s\n" "cid-success" ;;' \
+        '    stop|start) printf "%s %s\n" "${1}" "${*:2}" >> "${log}" ;;' \
+        'esac' \
+        'exit 0' \
+        > "${STUB_DIR}/docker"
+    chmod +x "${STUB_DIR}/docker"
+    run env DOCKER_STUB_LOG="${docker_log}" \
+        bash "${REPO_ROOT}/src/bin/pg-volume-backup"
+    [ "$status" -eq 0 ]
+    grep -q 'start cid-success' "${docker_log}"
+}
+
+@test "pg-volume-backup: AWS_DRYRUN=true adds --dryrun flag" {
+    # Exercises line 224: aws_dry=("--dryrun").
+    run env AWS_DRYRUN=true \
+        bash "${REPO_ROOT}/src/bin/pg-volume-backup"
+    [ "$status" -eq 0 ]
+}
+
+@test "pg-volume-backup: bzip2 compression" {
+    # Exercises bzip2 case branch (lines 243-248).
+    run env COMPRESSION=bzip2 \
+        bash "${REPO_ROOT}/src/bin/pg-volume-backup"
+    [ "$status" -eq 0 ]
+}
+
+@test "pg-volume-backup: gzip compression" {
+    # Exercises gzip case branch (lines 250-254).
+    run env COMPRESSION=gzip \
+        bash "${REPO_ROOT}/src/bin/pg-volume-backup"
+    [ "$status" -eq 0 ]
+}
+
+@test "pg-volume-backup: xz compression" {
+    # Exercises xz case branch (lines 257-261).
+    run env COMPRESSION=xz \
+        bash "${REPO_ROOT}/src/bin/pg-volume-backup"
+    [ "$status" -eq 0 ]
+}
+
+@test "pg-volume-backup: pigz compression" {
+    # Exercises pigz case branch (lines 264-268).
+    run env COMPRESSION=pigz \
+        bash "${REPO_ROOT}/src/bin/pg-volume-backup"
+    [ "$status" -eq 0 ]
+}
+
+@test "pg-volume-backup: lzop compression" {
+    # Exercises lzop case branch (lines 271-275).
+    run env COMPRESSION=lzop \
+        bash "${REPO_ROOT}/src/bin/pg-volume-backup"
+    [ "$status" -eq 0 ]
+}
+
+@test "pg-volume-backup: GPG encryption" {
+    # Exercises GPG passphrase path (lines 287-301).
+    run env GPG_PASSPHRASE=testpass \
+        bash "${REPO_ROOT}/src/bin/pg-volume-backup"
+    [ "$status" -eq 0 ]
 }
