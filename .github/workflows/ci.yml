@@ -22,7 +22,7 @@ env:
 jobs:
   # ── Stage 1: Lint ──────────────────────────────────────────────────────────
   lint:
-    uses: 1121citrus/shared-github-workflows/.github/workflows/lint.yml@7736674092013c10af60f105cc8b6bccb7571afa
+    uses: 1121citrus/shared-github-workflows/.github/workflows/lint.yml@b06a3294d76bce96f5cd1cfc8974a4d673d6dc29
 
   # ── Stage 2: Build ─────────────────────────────────────────────────────────
   build:
