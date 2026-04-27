@@ -435,15 +435,15 @@ test_staging_cron_dryrun() {
         -v "${tmpdir}:/backup:ro" \
         ${DOCKER_RUN_ARGS:-} \
         "${IMAGE}" 2>&1) || result=$?
-    rm -rf "${tmpdir}"
 
     if [[ ${result} -ne 0 ]]; then
+        rm -rf "${tmpdir}"
         echo "FAIL '${FUNCNAME[0]}': could not start container" \
              "(exit=${result})"
         return 1
     fi
     # shellcheck disable=SC2064
-    trap "docker rm -f '${cid}' > /dev/null 2>&1 || true" RETURN
+    trap "docker rm -f '${cid}' > /dev/null 2>&1 || true; rm -rf '${tmpdir}'" RETURN
 
     # Poll every 5s for up to 90s for evidence the backup completed.
     local fired=false elapsed=0
