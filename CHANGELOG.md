@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-04-27
+
+### Changed
+
+- Migrate base image from Alpine to Amazon Linux 2023 (AL2023); replace
+  `apk` with `dnf`; switch runtime packages to AL2023 equivalents
+- Bump `shared-github-workflows` CI SHA pin to `b06a3294`
+- Switch Dependabot schedule from weekly to daily; update Docker ecosystem
+  comment to reflect `docker:cli` builder stage (not Alpine base)
+- Bump Alpine 3.22 → 3.23 (captured before AL2023 migration)
+
+### Added
+
+- Staging test: add `--dryrun`, `--advise`, and `--cache` options
+
+## [1.0.3] - 2026-04-26
+
+### Notes
+
+See git log for details.
+
+## [1.0.2] - 2026-04-26
+
+### Notes
+
+See git log for details.
+
+## [1.0.1] - 2026-04-25
+
+### Notes
+
+See git log for details.
+
+## [1.0.0] - 2026-04-12
+
+### Notes
+
+See git log for details.
+
 ## [0.0.1] - 2026-04-12
 
 ### Added
@@ -30,3 +69,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Release automation: `release-please` configuration
 - Documentation: README, SECURITY, CONTRIBUTING, src/bin/README,
   test/README, test/TESTING
+
+[Unreleased]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.3...v1.0.4
+[1.0.3]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.2...v1.0.3
+[1.0.2]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/1121citrus/pg-volume-backup/compare/v0.0.1...v1.0.0
+[0.0.1]: https://github.com/1121citrus/pg-volume-backup/releases/tag/v0.0.1
