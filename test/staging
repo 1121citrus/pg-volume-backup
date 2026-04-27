@@ -35,7 +35,19 @@
 #                             default: ~/.secrets/aws-credentials)
 #   --scan                    Run Trivy HIGH/CRITICAL scan on the image
 #                             (env: STAGING_SCAN; default: true)
-#   --no-scan                 Skip Trivy scan
+#   --no-scan                 Skip Trivy scan; implies --no-advise unless
+#                             --advise is given explicitly
+#   --dryrun                  Enable dry-run mode for backup tests
+#                             (env: DRYRUN; default: false)
+#   --no-dryrun               Disable dry-run mode (default)
+#   --no-coverage             Skip kcov coverage report (advisory only)
+#   --advise [LIST]           Run advisory scans: coverage,grype,scout,dive,all
+#                             (default list when LIST omitted: grype,scout)
+#   --no-advise               Disable all advisory scans
+#   --cache RULES             Scanner DB cache controls; RULES is semicolon-
+#                             separated key=targets pairs; keys: reset,
+#                             skip-update; targets: trivy,grype,all
+#                             e.g. 'reset=all' or 'skip-update=grype'
 #   --yes                     Skip the confirmation prompt
 #   --skip-e2e                Skip test_staging_backup_e2e and
 #                             test_staging_cron_backup_e2e
@@ -51,6 +63,7 @@
 #   AWS_CREDENTIALS_FILE Path to AWS credentials file
 #   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
 #                        Inline credentials (alternative to config/credentials files)
+#   DRYRUN               true = dry-run mode (default: false)
 #   STAGING_SCAN         true/false — controls Trivy scan (default: true)
 #   DOCKER_RUN_ARGS      Extra flags appended to every docker run invocation
 #
@@ -61,9 +74,16 @@
 #   # Quick iteration — skip Trivy scan:
 #   test/staging --no-scan 1121citrus/pg-volume-backup:latest
 #
-#   # Full suite (creates a transient bucket; no production bucket needed):
-#   test/staging \
+#   # Full suite with all advisory scans and fresh scanner DBs:
+#   test/staging --no-dryrun --cache reset=all --advise all \
 #       --aws-config ~/.secrets/aws-config \
+#       1121citrus/pg-volume-backup:latest
+#
+#   # Run all three advisory scanners:
+#   test/staging --advise grype,scout,dive 1121citrus/pg-volume-backup:latest
+#
+#   # Reset scanner DB caches for this run, then skip Grype DB update:
+#   test/staging --cache 'reset=all;skip-update=grype' \
 #       1121citrus/pg-volume-backup:latest
 #
 #   # Skip confirmation prompt (CI / scripted use):
@@ -89,17 +109,85 @@ IMAGE="${IMAGE:-}"
 AWS_S3_BUCKET_NAME="${AWS_S3_BUCKET_NAME:-}"
 AWS_CONFIG_FILE="${AWS_CONFIG_FILE:-}"
 AWS_CREDENTIALS_FILE="${AWS_CREDENTIALS_FILE:-}"
+DRYRUN="${DRYRUN:-false}"
 _YES=false
 _SKIP_E2E=false
 _SKIP_CRON=false
 _ONLY_TEST=""
 _SCAN="${STAGING_SCAN:-true}"
+_ADVISE_COVERAGE=false
+_ADVISE_DIVE=false
+_ADVISE_GRYPE=false
+_ADVISE_SCOUT=false
+_ADVISE_EXPLICIT=false   # set to true when --advise or --no-advise is passed
+_CACHE_RESET_TRIVY=false
+_CACHE_RESET_GRYPE=false
+_CACHE_SKIP_UPDATE_TRIVY=false
+_CACHE_SKIP_UPDATE_GRYPE=false
 
 # Tool image refs — keep in sync with the top-level build script.
+BATS_KCOV_IMAGE=1121citrus/bats-kcov
+BATS_KCOV_TAG=latest
+DIVE_IMAGE=wagoodman/dive
+DIVE_TAG=v0.13.1
+GRYPE_IMAGE=anchore/grype
+GRYPE_TAG=v0.87.0
 TRIVY_IMAGE=aquasec/trivy
 TRIVY_TAG=0.62.1
 
-TRIVY_CACHE_VOLUME=pg-volume-backup-trivy-cache
+# Named Docker volumes for scanner DB caches (avoid host-path coupling).
+TRIVY_CACHE_VOLUME=pg-volume-backup-staging-trivy-cache
+GRYPE_CACHE_VOLUME=pg-volume-backup-staging-grype-cache
+
+_set_cache_targets() {
+    local mode="$1" targets_csv="$2" target
+    IFS=',' read -ra _tgts <<< "${targets_csv,,}"
+    for target in "${_tgts[@]}"; do
+        case "${target}" in
+            trivy)
+                if [[ "${mode}" == "reset" ]];       then _CACHE_RESET_TRIVY=true; fi
+                if [[ "${mode}" == "skip-update" ]]; then _CACHE_SKIP_UPDATE_TRIVY=true; fi
+                ;;
+            grype)
+                if [[ "${mode}" == "reset" ]];       then _CACHE_RESET_GRYPE=true; fi
+                if [[ "${mode}" == "skip-update" ]]; then _CACHE_SKIP_UPDATE_GRYPE=true; fi
+                ;;
+            all)
+                if [[ "${mode}" == "reset" ]]; then
+                    _CACHE_RESET_TRIVY=true; _CACHE_RESET_GRYPE=true
+                fi
+                if [[ "${mode}" == "skip-update" ]]; then
+                    _CACHE_SKIP_UPDATE_TRIVY=true; _CACHE_SKIP_UPDATE_GRYPE=true
+                fi
+                ;;
+            *) echo "Unknown cache target: ${target}" >&2; exit 1 ;;
+        esac
+    done
+}
+
+_parse_cache_rules() {
+    local rules="$1" entry key value
+    IFS=';' read -ra _rules <<< "${rules}"
+    for entry in "${_rules[@]}"; do
+        key="${entry%%=*}"; value="${entry#*=}"
+        key="${key,,}"; key="${key// /}"; value="${value// /}"
+        if [[ "${entry}" != *=* || -z "${key}" || -z "${value}" ]]; then
+            echo "Invalid --cache rule: ${entry}" >&2; exit 1
+        fi
+        case "${key}" in
+            reset|skip-update) _set_cache_targets "${key}" "${value}" ;;
+            *) echo "Unknown --cache rule key: ${key}" >&2; exit 1 ;;
+        esac
+    done
+}
+
+_reset_cache_db() {
+    local volume_name="$1"
+    docker run --rm \
+        -v "${volume_name}:/cache" \
+        alpine:3.21 \
+        sh -c "rm -rf /cache/* && mkdir -p /cache"
+}
 
 show_help() {
     # Extract header comment from SYNOPSIS through EXAMPLES (inclusive).
@@ -181,6 +269,7 @@ setup() {
         # shellcheck disable=SC2086
         docker run --rm ${DOCKER_RUN_ARGS:-} \
             -e "AWS_S3_BUCKET_NAME=${AWS_S3_BUCKET_NAME:-}" \
+            -e "DRYRUN=${DRYRUN:-false}" \
             "${aws_mounts[@]}" \
             "${IMAGE}" /usr/local/bin/pg-volume-backup "$@" 2>&1
     }
@@ -208,10 +297,12 @@ setup() {
     export _aws_cfg _aws_cfg_mount _aws_creds _aws_creds_mount
     export -f _aws run_pg_volume_backup
 
-    # Create a shared image archive for Trivy — avoids mounting the Docker
-    # socket inside scanner containers, which hangs on macOS Docker Desktop.
+    # Create a shared image archive for Trivy, Grype, and Dive — avoids
+    # mounting the Docker socket inside scanner containers, which hangs on
+    # macOS Docker Desktop.
     _scan_tar=""
-    if [[ "${_SCAN}" == "true" ]]; then
+    if [[ "${_SCAN}" == "true" || "${_ADVISE_GRYPE}" == "true" \
+            || "${_ADVISE_DIVE}" == "true" ]]; then
         _scan_tar=$(mktemp /tmp/staging-scan-XXXXXX)
         docker save "${IMAGE}" > "${_scan_tar}"
     fi
@@ -697,7 +788,7 @@ test_staging_backup_e2e() {
     fi
 }
 
-# ── Scan tests ────────────────────────────────────────────────────────────────
+# ── Scan / advise tests ───────────────────────────────────────────────────────
 
 # test_staging_trivy_scan: Trivy HIGH/CRITICAL image scan.
 # Mirrors build Stage 4.  Fails when unfixed HIGH/CRITICAL CVEs are found.
@@ -730,6 +821,89 @@ test_staging_trivy_scan() {
     fi
 }
 
+# test_staging_grype_advise: Grype full-severity advisory scan.
+# Mirrors build Stage 5a.  Non-gating: findings are printed but never cause a
+# test failure.  Skipped when --no-advise is set, or when --no-scan is given
+# without an explicit --advise.
+test_staging_grype_advise() {
+    [[ "${_ADVISE_GRYPE}" == "true" ]] || {
+        _skip "--no-advise grype: Grype advisory scan skipped"
+        return 0
+    }
+    printf '  running Grype advisory scan on %s...\n' "${IMAGE}" >&2
+    local _grype_extra_env=()
+    if [[ "${_CACHE_SKIP_UPDATE_GRYPE}" == "true" ]]; then
+        echo "    Grype DB update skipped for this run (--cache skip-update=grype)" >&2
+        _grype_extra_env+=(-e GRYPE_DB_AUTO_UPDATE=false)
+    fi
+    docker run --rm \
+        -v "${_scan_tar}:/scan.tar:ro" \
+        -v "${GRYPE_CACHE_VOLUME}:/root/.cache/grype" \
+        "${_grype_extra_env[@]}" \
+        "${GRYPE_IMAGE}:${GRYPE_TAG}" \
+            docker-archive:/scan.tar 2>&1 || true
+    echo "PASS '${FUNCNAME[0]}': Grype advisory scan complete (advisory only)"
+}
+
+# test_staging_scout_advise: Docker Scout CVE advisory scan.
+# Mirrors build Stage 5b.  Non-gating.
+test_staging_scout_advise() {
+    [[ "${_ADVISE_SCOUT}" == "true" ]] || {
+        _skip "--no-advise scout: Docker Scout advisory scan skipped"
+        return 0
+    }
+    printf '  running Docker Scout advisory scan on %s...\n' "${IMAGE}" >&2
+    docker scout cves "${IMAGE}" 2>&1 || true
+    echo "PASS '${FUNCNAME[0]}': Docker Scout advisory scan complete (advisory only)"
+}
+
+# test_staging_dive_advise: Dive image layer analysis.
+# Mirrors build Stage 5c.  Non-gating.
+test_staging_dive_advise() {
+    [[ "${_ADVISE_DIVE}" == "true" ]] || {
+        _skip "--no-advise dive: Dive layer analysis skipped"
+        return 0
+    }
+    printf '  running Dive layer analysis on %s...\n' "${IMAGE}" >&2
+    docker run --rm \
+        -v "${_scan_tar}:/scan.tar:ro" \
+        "${DIVE_IMAGE}:${DIVE_TAG}" \
+            --source docker-archive \
+            --ci \
+            /scan.tar 2>&1 || true
+    echo "PASS '${FUNCNAME[0]}': Dive layer analysis complete (advisory only)"
+}
+
+# test_staging_coverage_advise: kcov bash line-coverage report.
+# Mirrors build Stage 5d.  Non-gating: results are printed but never cause a
+# test failure.  Skipped when --no-coverage or --no-advise is set.
+test_staging_coverage_advise() {
+    [[ "${_ADVISE_COVERAGE}" == "true" ]] || {
+        _skip "--no-coverage: coverage analysis skipped"
+        return 0
+    }
+    local script_dir
+    script_dir=$(dirname "$(readlink -f "$0")")
+    printf '  running kcov coverage analysis...\n' >&2
+    docker run --rm \
+        --cap-add SYS_PTRACE \
+        --security-opt seccomp=unconfined \
+        -v "${script_dir}/..:/code:ro" \
+        -w /code \
+        "${BATS_KCOV_IMAGE}:${BATS_KCOV_TAG}" \
+        bats-coverage \
+            test/00-coverage.bats \
+            test/01-build.bats \
+            test/02-pg-volume-backup.bats \
+            test/03-backup-required-vars.bats \
+            test/04-backup-success.bats \
+            test/05-backup-encryption.bats \
+            test/06-healthcheck.bats \
+            test/07-image-metadata.bats \
+        >&2 || true
+    echo "PASS '${FUNCNAME[0]}': coverage analysis complete (advisory only)"
+}
+
 # ---------------------------------------------------------------------------
 # Test runner
 # ---------------------------------------------------------------------------
@@ -740,6 +914,10 @@ run_tests() {
         test_staging_version
         test_staging_unknown_option
         test_staging_trivy_scan
+        test_staging_grype_advise
+        test_staging_scout_advise
+        test_staging_dive_advise
+        test_staging_coverage_advise
         test_staging_no_bucket
         test_staging_no_volumes
         test_staging_dryrun
@@ -779,6 +957,15 @@ run_tests() {
 
     setup || { echo "ERROR: Setup failed"; return 1; }
 
+    if [[ "${_CACHE_RESET_TRIVY}" == "true" ]]; then
+        echo "==> Cache: reset Trivy DB" >&2
+        _reset_cache_db "${TRIVY_CACHE_VOLUME}"
+    fi
+    if [[ "${_CACHE_RESET_GRYPE}" == "true" ]]; then
+        echo "==> Cache: reset Grype DB" >&2
+        _reset_cache_db "${GRYPE_CACHE_VOLUME}"
+    fi
+
     echo "Running staging tests for pg-volume-backup..."
     echo "================================================="
     echo "Image:  ${IMAGE}"
@@ -791,6 +978,8 @@ run_tests() {
     "${_SKIP_E2E}"            && echo "Filter: --skip-e2e"
     "${_SKIP_CRON}"           && echo "Filter: --skip-cron"
     echo "Scan:   ${_SCAN} (Trivy HIGH/CRITICAL)"
+    echo "Advise: coverage=${_ADVISE_COVERAGE} dive=${_ADVISE_DIVE}" \
+         "grype=${_ADVISE_GRYPE} scout=${_ADVISE_SCOUT}"
     echo "================================================="
 
     _SKIP_COUNT=0
@@ -850,8 +1039,48 @@ main() {
                 AWS_CREDENTIALS_FILE="$2"
                 shift
                 ;;
-            --scan)       _SCAN=true   ;;
-            --no-scan)    _SCAN=false  ;;
+            --scan)         _SCAN=true   ;;
+            --no-scan)      _SCAN=false  ;;
+            --dryrun)       DRYRUN=true  ;;
+            --no-dryrun)    DRYRUN=false ;;
+            --no-coverage)  _ADVISE_COVERAGE=false ;;
+            --advise|--advice)
+                _ADVISE_EXPLICIT=true
+                if [[ $# -gt 1 && "$2" =~ \
+                        ^(coverage|dive|grype|scout|all)(,(coverage|dive|grype|scout|all))*$ ]]; then
+                    advisements="$2"; shift
+                else
+                    advisements="grype,scout"
+                fi
+                _ADVISE_COVERAGE=false
+                _ADVISE_DIVE=false
+                _ADVISE_GRYPE=false
+                _ADVISE_SCOUT=false
+                IFS=',' read -ra adv_list <<< "$advisements"
+                for adv in "${adv_list[@]}"; do
+                    case "$adv" in
+                        coverage) _ADVISE_COVERAGE=true ;;
+                        dive)     _ADVISE_DIVE=true ;;
+                        grype)    _ADVISE_GRYPE=true ;;
+                        scout)    _ADVISE_SCOUT=true ;;
+                        all) _ADVISE_COVERAGE=true; _ADVISE_DIVE=true
+                             _ADVISE_GRYPE=true; _ADVISE_SCOUT=true ;;
+                        *)   echo "Unknown advisement: $adv" >&2; exit 1 ;;
+                    esac
+                done
+                ;;
+            --no-advise)
+                _ADVISE_COVERAGE=false
+                _ADVISE_DIVE=false
+                _ADVISE_GRYPE=false
+                _ADVISE_SCOUT=false
+                _ADVISE_EXPLICIT=true
+                ;;
+            --cache)
+                [[ $# -ge 2 ]] || {
+                    echo "option '${1}' requires an argument" >&2; exit 1; }
+                _parse_cache_rules "$2"; shift
+                ;;
             --yes)        _YES=true    ;;
             --skip-e2e)   _SKIP_E2E=true ;;
             --skip-cron)  _SKIP_CRON=true ;;
@@ -877,9 +1106,20 @@ main() {
         shift
     done
 
+    # --no-scan implies --no-advise unless --advise was given explicitly.
+    if [[ "${_SCAN}" == "false" && "${_ADVISE_EXPLICIT}" == "false" ]]; then
+        _ADVISE_COVERAGE=false
+        _ADVISE_DIVE=false
+        _ADVISE_GRYPE=false
+        _ADVISE_SCOUT=false
+    fi
+
     # Propagate resolved values so setup() and test functions see them.
-    export IMAGE AWS_S3_BUCKET_NAME AWS_CONFIG_FILE AWS_CREDENTIALS_FILE
+    export IMAGE AWS_S3_BUCKET_NAME AWS_CONFIG_FILE AWS_CREDENTIALS_FILE DRYRUN
     export _YES _SKIP_E2E _SKIP_CRON _ONLY_TEST _SCAN
+    export _ADVISE_COVERAGE _ADVISE_DIVE _ADVISE_GRYPE _ADVISE_SCOUT
+    export _CACHE_RESET_TRIVY _CACHE_RESET_GRYPE
+    export _CACHE_SKIP_UPDATE_TRIVY _CACHE_SKIP_UPDATE_GRYPE
 
     # ── Preflight summary ────────────────────────────────────────────────────
     local aws_cfg="${AWS_CONFIG_FILE:-${HOME}/.secrets/aws-config}"
@@ -898,6 +1138,26 @@ main() {
         echo "  Scan:     Trivy HIGH/CRITICAL (--no-scan to skip)"
     else
         echo "  Scan:     skipped (--no-scan)"
+    fi
+    local _advise_any=false
+    [[ "${_ADVISE_COVERAGE}" == "true" || "${_ADVISE_DIVE}" == "true" \
+        || "${_ADVISE_GRYPE}" == "true" || "${_ADVISE_SCOUT}" == "true" ]] \
+        && _advise_any=true
+    if "${_advise_any}"; then
+        local _advise_list=()
+        [[ "${_ADVISE_COVERAGE}" == "true" ]] && _advise_list+=(coverage)
+        [[ "${_ADVISE_DIVE}"     == "true" ]] && _advise_list+=(dive)
+        [[ "${_ADVISE_GRYPE}"    == "true" ]] && _advise_list+=(grype)
+        [[ "${_ADVISE_SCOUT}"    == "true" ]] && _advise_list+=(scout)
+        local IFS=,
+        echo "  Advise:   ${_advise_list[*]} (--no-advise to skip)"
+    elif [[ "${_SCAN}" == "false" && "${_ADVISE_EXPLICIT}" == "false" ]]; then
+        echo "  Advise:   skipped (implied by --no-scan; use --advise to enable)"
+    else
+        echo "  Advise:   skipped (--no-advise)"
+    fi
+    if [[ "${DRYRUN}" == "true" ]]; then
+        echo "  Dry-run:  true — backup writes are suppressed"
     fi
     if "${_SKIP_CRON}"; then
         echo "  Cron:     skipped (--skip-cron)"
