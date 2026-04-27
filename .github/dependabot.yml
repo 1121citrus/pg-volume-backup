@@ -1,7 +1,7 @@
 # Dependabot configuration.
 #
 # Dependabot opens automated PRs to keep dependencies current.
-# Each update group is checked weekly on Monday mornings (UTC).
+# Each update group is checked daily (UTC).
 #
 # References:
 #   https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
@@ -16,8 +16,7 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "daily"
       time: "06:00"
       timezone: "UTC"
     labels:
@@ -25,12 +24,11 @@ updates:
       - "github-actions"
 
   # ── Docker ──────────────────────────────────────────────────────────────────
-  # Tracks the alpine base image pinned directly in the FROM line.
+  # Tracks the docker:cli builder stage FROM line.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "daily"
       time: "06:00"
       timezone: "UTC"
     labels:
