@@ -11,7 +11,6 @@
 #         [--platform PLATFORMS] [--registry REGISTRY]
 #         [--no-sbom] [--no-provenance]
 #         [--no-lint] [--no-test]
-#         [--run-staging]
 #         [--no-scan]
 #         [--advise [ADVISEMENTS]] [--advice [ADVISEMENTS]] [--no-advise]
 #         [--cache CACHE_RULES]
@@ -33,7 +32,6 @@
 #   --no-provenance     Skip generating a provenance attestation (push only).
 #   --no-lint           Skip hadolint Dockerfile check and shellcheck.
 #   --no-test           Skip running the test suite.
-#   --run-staging       Run test/staging after Stage 3 test. Default: off.
 #   --no-scan           Skip all gating vulnerability scans (Trivy, Grype,
 #                       Scout). Also skips advisory scans by default; pass
 #                       --advise after --no-scan to keep them.
@@ -63,10 +61,6 @@
 #   are themselves overridden by the matching CLI flag:
 #     BUILD_VERSION, BUILD_PUSH, BUILD_PLATFORM, BUILD_REGISTRY
 #     BUILD_LINT, BUILD_TEST, BUILD_SCAN, BUILD_SCAN_GRYPE, BUILD_SCAN_SCOUT
-#     BUILD_REPORT_JSON
-#     BUILD_TEST_SUMMARY_JSON
-#     BUILD_RUN_STAGING
-#     BUILD_STAGING_SUMMARY_JSON
 #   BUILD_CACHE_WARN_DAYS
 #                       Warn when the Trivy or Grype DB is older than this
 #                       many days. Default: 1. Set to 0 to suppress.
@@ -81,7 +75,6 @@
 #   1.  Lint      — hadolint (Dockerfile) + shellcheck + markdownlint
 #   2.  Build     — single-platform --load into local Docker daemon
 #   3.  Test      — bats test suite
-#   3d. Staging   — optional integration harness (only with --run-staging)
 #   4.  Scan      — Trivy CRITICAL/HIGH image scan (gating)
 #   4b. Scan      — Grype full-severity scan (gating)
 #   4c. Scan      — Docker Scout CVE scan (gating)
@@ -113,11 +106,20 @@
 
 set -euo pipefail
 
-# -- GENERATED metadata (informational; enforcement is in CI) --
-# shellcheck disable=SC2034
-GENERATED_AT="2026-04-28T01:30:43Z"
-# shellcheck disable=SC2034
-GENERATED_FROM_SHA="85cd04f"
+# ---------------------------------------------------------------------------
+# Developer orientation
+#
+# This script is the local equivalent of the CI workflow. Run it before
+# pushing to verify that every quality gate passes. Each stage can be
+# skipped individually (see OPTIONS above).
+#
+# Scanner DB caches persist in Docker named volumes between runs. The first
+# run primes the cache from the internet; later runs skip the download.
+# Use --cache reset=all to force a fresh download before a release scan.
+#
+# --dry-run prints every command without executing it — useful for
+# understanding what a stage does before running it for the first time.
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Defaults — may be overridden by environment variables or CLI flags.
@@ -134,7 +136,6 @@ CACHE_SKIP_UPDATE_TRIVY=false
 CACHE_SKIP_UPDATE_GRYPE=false
 CACHE_WARN_DAYS=${BUILD_CACHE_WARN_DAYS:-1}
 DRY_RUN=false
-BUILD_REPORT_JSON=${BUILD_REPORT_JSON:-}
 LINT=${BUILD_LINT:-true}
 PLATFORMS=${BUILD_PLATFORM:-linux/amd64,linux/arm64}
 PROVENANCE=true
@@ -142,16 +143,11 @@ PUSH=${BUILD_PUSH:-false}
 REGISTRY=${BUILD_REGISTRY:-1121citrus}
 SBOM=true
 TEST=${BUILD_TEST:-true}
-TEST_SUMMARY_JSON=${BUILD_TEST_SUMMARY_JSON:-}
-RUN_STAGING=${BUILD_RUN_STAGING:-false}
-STAGING_SUMMARY_JSON=${BUILD_STAGING_SUMMARY_JSON:-}
-if [[ -n "${BUILD_REPORT_JSON}" && -z "${TEST_SUMMARY_JSON}" ]]; then TEST_SUMMARY_JSON="${BUILD_REPORT_JSON%.json}.test.json"; fi
-if [[ -n "${BUILD_REPORT_JSON}" && -z "${STAGING_SUMMARY_JSON}" ]]; then STAGING_SUMMARY_JSON="${BUILD_REPORT_JSON%.json}.staging.json"; fi
 VERSION=${BUILD_VERSION:-}
 
 IMAGE_NAME=pg-volume-backup
 
-# Tool image references — update these in src/build/pins.json and regenerate.
+# Tool image references — edit these variables to update tool versions.
 BATS_KCOV_IMAGE=1121citrus/bats-kcov
 BATS_KCOV_TAG=latest
 DIVE_DOCKER_CLIENT_API=1.47
@@ -175,6 +171,9 @@ GRYPE_DB_CACHE_DIR=/grype-db
 # ---------------------------------------------------------------------------
 # Helpers: cache control parsing
 # ---------------------------------------------------------------------------
+# set_cache_targets — set cache-control flags for the named scanner targets.
+# Called by parse_cache_rules for each key=value pair from --cache.
+# Args: $1=mode (reset|skip-update)  $2=targets_csv (trivy,grype,all)
 set_cache_targets() {
     local mode="$1"
     local targets_csv="$2"
@@ -214,6 +213,10 @@ set_cache_targets() {
     done
 }
 
+# parse_cache_rules — parse the --cache flag value and dispatch to
+# set_cache_targets.  Accepts semicolon-separated key=value pairs
+# (e.g. "reset=trivy;skip-update=grype").  Exits 1 on malformed input.
+# Args: $1=rules (semicolon-separated string)
 parse_cache_rules() {
     local rules="$1"
     local entry
@@ -250,6 +253,10 @@ parse_cache_rules() {
     done
 }
 
+# volume_has_file — return 0 if file_path exists inside a Docker volume.
+# Runs an Alpine container to perform the check so it is host-filesystem-
+# agnostic.  Always returns 1 in dry-run mode (safe-fail).
+# Args: $1=volume_name  $2=file_path (absolute path inside the volume)
 volume_has_file() {
     local volume_name="$1"
     local file_path="$2"
@@ -264,6 +271,11 @@ volume_has_file() {
         sh -c "test -f \"${file_path}\""
 }
 
+# grype_db_ready — return 0 if the Grype vulnerability database is present
+# and valid inside the cache volume.  Runs `grype db status` inside a
+# container so it uses the same paths as the actual scan.  Always returns 1
+# in dry-run mode (safe-fail).
+# Args: $1=volume_name
 grype_db_ready() {
     local volume_name="$1"
 
@@ -277,6 +289,10 @@ grype_db_ready() {
         "${GRYPE_IMAGE}:${GRYPE_TAG}" db status >/dev/null 2>&1
 }
 
+# reset_cache_db — wipe and recreate a Docker volume used as a scanner DB
+# cache (Trivy or Grype).  Runs Alpine inside a container so the operation
+# is cross-platform and independent of host filesystem permissions.
+# Args: $1=volume_name
 reset_cache_db() {
     local volume_name="$1"
     # Reset the volume by removing all contents and recreating the directory.
@@ -371,45 +387,6 @@ _timed() {
     return "${_rc}"
 }
 
-# Build report helper: writes optional aggregate JSON report combining
-# test and staging summary artifacts.
-write_build_report() {
-    if [[ -z "${BUILD_REPORT_JSON:-}" ]]; then
-        return 0
-    fi
-
-    local test_json="null"
-    local staging_json="null"
-
-    if [[ -n "${TEST_SUMMARY_JSON:-}" && -f "${TEST_SUMMARY_JSON}" ]]; then
-        test_json=$(cat "${TEST_SUMMARY_JSON}")
-    fi
-
-    if [[ -n "${STAGING_SUMMARY_JSON:-}" && -f "${STAGING_SUMMARY_JSON}" ]]; then
-        staging_json=$(cat "${STAGING_SUMMARY_JSON}")
-    fi
-
-    mkdir -p "$(dirname "${BUILD_REPORT_JSON}")"
-
-    cat > "${BUILD_REPORT_JSON}" <<EOF
-{
-  "kind": "build-report",
-  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "image": "${full_image}:${VERSION}",
-  "test": ${test_json},
-  "staging": ${staging_json}
-}
-EOF
-
-    echo "    report: ${BUILD_REPORT_JSON}" >&2
-    if [[ -n "${TEST_SUMMARY_JSON:-}" ]]; then
-        echo "    report section test: ${TEST_SUMMARY_JSON}" >&2
-    fi
-    if [[ -n "${STAGING_SUMMARY_JSON:-}" ]]; then
-        echo "    report section staging: ${STAGING_SUMMARY_JSON}" >&2
-    fi
-}
-
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -432,7 +409,6 @@ while [[ $# -gt 0 ]]; do
         --no-provenance)    PROVENANCE=false ;;
         --no-lint)          LINT=false ;;
         --no-test)          TEST=false ;;
-        --run-staging)      RUN_STAGING=true ;;
         --no-scan)
             SCAN=false
             SCAN_GRYPE=false
@@ -651,26 +627,7 @@ if [[ "${TEST}" == "true" ]]; then
         "${script_dir}/test/06-healthcheck.bats" \
         "${script_dir}/test/07-image-metadata.bats" \
         "${script_dir}/test/bin/"*
-    if [[ -x "${script_dir}/test/run-all" ]]; then
-        (cd "${script_dir}" && env IMAGE="${full_image}:${VERSION}" TEST_SUMMARY_JSON="${TEST_SUMMARY_JSON}" run ./test/run-all)
-    else
     (cd "${script_dir}" && IMAGE="${full_image}:${VERSION}" run ./test/run-all)
-    fi
-    write_build_report
-fi
-
-# ---------------------------------------------------------------------------
-# Stage 3d: Staging (optional)
-# Runs test/staging only when explicitly requested with --run-staging.
-# ---------------------------------------------------------------------------
-if [[ "${RUN_STAGING}" == "true" ]]; then
-    echo "==> Stage 3d: Staging" >&2
-    if [[ ! -x "${script_dir}/test/staging" ]]; then
-        echo "    SKIP: test/staging not found or not executable" >&2
-    else
-        (cd "${script_dir}" && run env STAGING_SUMMARY_JSON="${STAGING_SUMMARY_JSON}" ./test/staging)
-    fi
-    write_build_report
 fi
 
 # ---------------------------------------------------------------------------

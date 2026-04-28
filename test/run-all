@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 
-# pg-volume-backup: run the full automated test suite.
-#
-# Copyright (C) 2026 James Hanlon [mailto:jim@hanlonsoftware.com]
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# test/run-all wrapper script
 
 set -euo pipefail
 
@@ -17,6 +14,6 @@ whereami=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
         -e "IMAGE=${IMAGE:-}" \
         --workdir "${PWD}" \
         --entrypoint sh \
-        bats/bats:1.13.0@sha256:6e4b9369468b7f3fd8f402ac6cc8ea7b2e4903eae28d08785f31a0245eb51a44 \
-        -c "apk add --quiet --no-cache docker-cli gnupg >/dev/null 2>&1 && bats test"
+        "bats/bats:1.13.0" \
+        -c "apk add --quiet --no-cache docker-cli >/dev/null 2>&1 && bats test"
 )
