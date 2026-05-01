@@ -1,131 +1,41 @@
 #!/usr/bin/env bash
+# shellcheck shell=bash
+# 1121citrus.build-date 2026-05-01T00:52:40Z
+# 1121citrus.build-version 6bbe275c0778
 
-# test/staging — functional tests for pg-volume-backup against live AWS.
-#
-# Copyright (C) 2026 James Hanlon [mailto:jim@hanlonsoftware.com]
-# SPDX-License-Identifier: AGPL-3.0-or-later
-#
-# These tests exercise pg-volume-backup end-to-end with no stubs.
-# Tests that require a live S3 bucket are skipped (not failed) when
-# AWS_S3_BUCKET_NAME is unset or AWS credentials are unavailable.
-#
-# No PostgreSQL instance is required: the end-to-end test backs up two
-# synthetic raw-volume directories and verifies the resulting S3 objects.
-#
-# IAM permissions required:
-#   Smoke tests (test_staging_dryrun):
-#     None — dry-run makes no API calls
-#   End-to-end correctness test (test_staging_backup_e2e):
-#     On arn:aws:s3:::test.pg-volume-backup-*:
-#       s3:CreateBucket, s3:DeleteBucket
-#       s3:PutObject, s3:GetObject, s3:ListBucket, s3:DeleteObject
+# test/staging — functional staging tests for pg-volume-backup.
 #
 # SYNOPSIS
-#   test/staging [options] [IMAGE]
+#   test/staging [--image IMAGE]
+#                [--bucket BUCKET]
+#                [--aws-credentials FILE]
+#                [--dryrun | --no-dryrun]
+#                [--scan | --no-scan]
+#                [--advise [ADVISEMENTS] | --no-advise]
+#                [--cache CACHE_RULES]
+#                [--skip-e2e] [--test NAME] [--help]
 #
 # OPTIONS
-#   IMAGE                     Docker image to test (positional; also --image)
-#   --image IMAGE             Docker image to test (env: IMAGE)
-#   --bucket BUCKET           S3 bucket name (env: AWS_S3_BUCKET_NAME)
-#   --aws-config FILE         AWS config file path
-#                             (env: AWS_CONFIG_FILE;
-#                             default: ~/.secrets/aws-config)
-#   --aws-credentials FILE    AWS credentials file path
-#                             (env: AWS_CREDENTIALS_FILE;
-#                             default: ~/.secrets/aws-credentials)
-#   --scan                    Run Trivy HIGH/CRITICAL scan on the image
-#                             (env: STAGING_SCAN; default: true)
-#   --no-scan                 Skip Trivy scan; implies --no-advise unless
-#                             --advise is given explicitly
-#   --dryrun                  Enable dry-run mode for backup tests
-#                             (env: DRYRUN; default: false)
-#   --no-dryrun               Disable dry-run mode (default)
-#   --no-coverage             Skip kcov coverage report (advisory only)
-#   --advise [LIST]           Run advisory scans: coverage,grype,scout,dive,all
-#                             (default list when LIST omitted: grype,scout)
-#   --no-advise               Disable all advisory scans
-#   --cache RULES             Scanner DB cache controls; RULES is semicolon-
-#                             separated key=targets pairs; keys: reset,
-#                             skip-update; targets: trivy,grype,all
-#                             e.g. 'reset=all' or 'skip-update=grype'
-#   --yes                     Skip the confirmation prompt
-#   --skip-e2e                Skip test_staging_backup_e2e and
-#                             test_staging_cron_backup_e2e
-#   --skip-cron               Skip all cron service-mode tests
-#   --test TEST               Run only the named test function
-#   -h, --help                Print this message and exit
+#   --image IMAGE    Docker image to test (positional arg also accepted).
+#   --bucket BUCKET  S3 bucket for backup/restore tests.
+#   --aws-credentials FILE
+#                    Path to AWS credentials file.
+#   --dryrun         Pass --dryrun to the container command.
+#   --no-dryrun      Disable dryrun mode.
+#   --scan           Run Trivy CVE scan (gating). Default: on.
+#   --no-scan        Skip the Trivy scan.
+#   --advise [LIST]  Advisory scans: dive,grype,scout,coverage,all.
+#   --no-advise      Disable all advisory scans.
+#   --cache CACHE_RULES
+#                    One-run cache controls (reset=all, skip-update=trivy).
+#   --skip-e2e       Skip tests flagged as destructive/end-to-end.
+#   --test NAME      Run only the named test function.
+#   -h|--help        Print this message and exit.
 #
-# ENVIRONMENT
-#   IMAGE                Docker image to test
-#   AWS_S3_BUCKET_NAME   S3 bucket name shown in the preflight summary;
-#                        the e2e test creates its own transient bucket
-#   AWS_CONFIG_FILE      Path to AWS config file
-#   AWS_CREDENTIALS_FILE Path to AWS credentials file
-#   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
-#                        Inline credentials (alternative to config/credentials files)
-#   DRYRUN               true = dry-run mode (default: false)
-#   STAGING_SCAN         true/false — controls Trivy scan (default: true)
-#   DOCKER_RUN_ARGS      Extra flags appended to every docker run invocation
-#
-# EXAMPLES
-#   # AWS-independent smoke tests (no credentials needed):
-#   test/staging 1121citrus/pg-volume-backup:latest
-#
-#   # Quick iteration — skip Trivy scan:
-#   test/staging --no-scan 1121citrus/pg-volume-backup:latest
-#
-#   # Full suite with all advisory scans and fresh scanner DBs:
-#   test/staging --no-dryrun --cache reset=all --advise all \
-#       --aws-config ~/.secrets/aws-config \
-#       1121citrus/pg-volume-backup:latest
-#
-#   # Run all three advisory scanners:
-#   test/staging --advise grype,scout,dive 1121citrus/pg-volume-backup:latest
-#
-#   # Reset scanner DB caches for this run, then skip Grype DB update:
-#   test/staging --cache 'reset=all;skip-update=grype' \
-#       1121citrus/pg-volume-backup:latest
-#
-#   # Skip confirmation prompt (CI / scripted use):
-#   test/staging --yes 1121citrus/pg-volume-backup:latest
-#
-#   # Run only the end-to-end correctness test:
-#   test/staging --test test_staging_backup_e2e \
-#       1121citrus/pg-volume-backup:latest
-#
-#   # Skip e2e test when credentials lack s3:CreateBucket:
-#   test/staging --skip-e2e 1121citrus/pg-volume-backup:latest
-#
-#   # Skip cron service-mode tests (avoids the 90s cron-fire wait):
-#   test/staging --no-scan --skip-cron \
-#       1121citrus/pg-volume-backup:latest
 
 set -euo pipefail
 
-# ---------------------------------------------------------------------------
-# Defaults — overridden by environment variables, then by CLI flags.
-# ---------------------------------------------------------------------------
-IMAGE="${IMAGE:-}"
-AWS_S3_BUCKET_NAME="${AWS_S3_BUCKET_NAME:-}"
-AWS_CONFIG_FILE="${AWS_CONFIG_FILE:-}"
-AWS_CREDENTIALS_FILE="${AWS_CREDENTIALS_FILE:-}"
-DRYRUN="${DRYRUN:-false}"
-_YES=false
-_SKIP_E2E=false
-_SKIP_CRON=false
-_ONLY_TEST=""
-_SCAN="${STAGING_SCAN:-true}"
-_ADVISE_COVERAGE=false
-_ADVISE_DIVE=false
-_ADVISE_GRYPE=false
-_ADVISE_SCOUT=false
-_ADVISE_EXPLICIT=false   # set to true when --advise or --no-advise is passed
-_CACHE_RESET_TRIVY=false
-_CACHE_RESET_GRYPE=false
-_CACHE_SKIP_UPDATE_TRIVY=false
-_CACHE_SKIP_UPDATE_GRYPE=false
-
-# Tool image refs — keep in sync with the top-level build script.
+# Tool image pins
 BATS_KCOV_IMAGE=1121citrus/bats-kcov
 BATS_KCOV_TAG=latest
 DIVE_IMAGE=wagoodman/dive
@@ -134,37 +44,69 @@ GRYPE_IMAGE=anchore/grype
 GRYPE_TAG=v0.87.0
 TRIVY_IMAGE=aquasec/trivy
 TRIVY_TAG=0.62.1
+ALPINE_IMAGE=alpine
+ALPINE_TAG=3.21
 
-# Named Docker volumes for scanner DB caches (avoid host-path coupling).
+# Named Docker volumes for scanner DB caches
 TRIVY_CACHE_VOLUME=pg-volume-backup-staging-trivy-cache
 GRYPE_CACHE_VOLUME=pg-volume-backup-staging-grype-cache
 
+# ---------------------------------------------------------------------------
+# Defaults — overridden by environment variables, then by CLI flags.
+# ---------------------------------------------------------------------------
+IMAGE="${IMAGE:-}"
+S3_BUCKET_NAME="${S3_BUCKET_NAME:-${AWS_S3_BUCKET_NAME:-${BUCKET:-}}}"
+BUCKET_LIST="${BUCKET_LIST:-}"
+AWS_CONFIG_FILE="${AWS_CONFIG_FILE:-}"
+AWS_CREDENTIALS_FILE="${AWS_CREDENTIALS_FILE:-}"
+DRYRUN="${DRYRUN:-true}"
+_YES=false
+DOCKER_RUN_ARGS="${DOCKER_RUN_ARGS:-}"
+_SKIP_E2E=false       # --skip-e2e: omit tests marked _TEST_DESTRUCTIVE=true
+_ONLY_TEST=""         # --test NAME: run only this one test by function name
+_SCAN="${STAGING_SCAN:-true}"         # --no-scan: skip Trivy gating scan
+_ADVISE_COVERAGE=false  # --advise coverage: run kcov (advisory; never gates)
+_ADVISE_DIVE=false      # --advise dive: Dive layer analysis (advisory)
+_ADVISE_GRYPE=false     # --advise grype: Grype full-severity scan (advisory)
+_ADVISE_SCOUT=false     # --advise scout: Docker Scout scan (advisory)
+_ADVISE_EXPLICIT=false  # set true once --advise or --no-advise is passed
+_CACHE_RESET_TRIVY=false       # --cache reset=trivy: wipe Trivy DB volume
+_CACHE_RESET_GRYPE=false       # --cache reset=grype: wipe Grype DB volume
+_CACHE_SKIP_UPDATE_TRIVY=false  # --cache skip-update=trivy: keep existing DB
+_CACHE_SKIP_UPDATE_GRYPE=false  # --cache skip-update=grype: keep existing DB
+
+# ---------------------------------------------------------------------------
+# Utility functions
+# ---------------------------------------------------------------------------
 _set_cache_targets() {
     local mode="$1" targets_csv="$2" target
     IFS=',' read -ra _tgts <<< "${targets_csv,,}"
     for target in "${_tgts[@]}"; do
         case "${target}" in
             trivy)
-                if [[ "${mode}" == "reset" ]];       then _CACHE_RESET_TRIVY=true; fi
-                if [[ "${mode}" == "skip-update" ]]; then _CACHE_SKIP_UPDATE_TRIVY=true; fi
+                [[ "${mode}" == "reset" ]]       && _CACHE_RESET_TRIVY=true
+                [[ "${mode}" == "skip-update" ]] && _CACHE_SKIP_UPDATE_TRIVY=true
                 ;;
             grype)
-                if [[ "${mode}" == "reset" ]];       then _CACHE_RESET_GRYPE=true; fi
-                if [[ "${mode}" == "skip-update" ]]; then _CACHE_SKIP_UPDATE_GRYPE=true; fi
+                [[ "${mode}" == "reset" ]]       && _CACHE_RESET_GRYPE=true
+                [[ "${mode}" == "skip-update" ]] && _CACHE_SKIP_UPDATE_GRYPE=true
                 ;;
             all)
-                if [[ "${mode}" == "reset" ]]; then
-                    _CACHE_RESET_TRIVY=true; _CACHE_RESET_GRYPE=true
-                fi
-                if [[ "${mode}" == "skip-update" ]]; then
-                    _CACHE_SKIP_UPDATE_TRIVY=true; _CACHE_SKIP_UPDATE_GRYPE=true
-                fi
+                [[ "${mode}" == "reset" ]] && {
+                    _CACHE_RESET_TRIVY=true; _CACHE_RESET_GRYPE=true; }
+                [[ "${mode}" == "skip-update" ]] && {
+                    _CACHE_SKIP_UPDATE_TRIVY=true
+                    _CACHE_SKIP_UPDATE_GRYPE=true; }
                 ;;
             *) echo "Unknown cache target: ${target}" >&2; exit 1 ;;
         esac
     done
 }
 
+# _parse_cache_rules — parse semicolon-separated key=value cache rules from
+# the --cache flag (e.g. "reset=trivy;skip-update=grype") and call
+# _set_cache_targets for each entry.
+# Args: $1=rules (semicolon-separated string)
 _parse_cache_rules() {
     local rules="$1" entry key value
     IFS=';' read -ra _rules <<< "${rules}"
@@ -181,21 +123,55 @@ _parse_cache_rules() {
     done
 }
 
+# _reset_cache_db — wipe and recreate a Docker volume used as a scanner DB
+# cache (Trivy or Grype).  Runs Alpine inside a container so the operation
+# is cross-platform and independent of host filesystem permissions.
+# Args: $1=volume_name
 _reset_cache_db() {
     local volume_name="$1"
     docker run --rm \
         -v "${volume_name}:/cache" \
-        alpine:3.21 \
+        "${ALPINE_IMAGE}:${ALPINE_TAG}" \
         sh -c "rm -rf /cache/* && mkdir -p /cache"
 }
 
+# show_help — print the SYNOPSIS section of this staging script to stdout.
+# Reads from the script's own header comment block (between "# SYNOPSIS" and
+# the first "set -" line), stripping the leading "# " prefix.
+# Args: none
 show_help() {
-    # Extract header comment from SYNOPSIS through EXAMPLES (inclusive).
     sed -n '/^# SYNOPSIS/,/^set -/p' "$0" \
         | grep '^#' \
         | sed 's/^# \{0,1\}//'
 }
 
+_SKIP_COUNT=0
+# _skip — record a skipped test and increment the global skip counter.
+# Prints a SKIP line to stdout (picked up by run_tests summary) using
+# FUNCNAME[1] so the skipping test's name appears in the output.
+# Args: $@=reason message
+_skip() {
+    echo "SKIP '${FUNCNAME[1]}': $*"
+    (( ++_SKIP_COUNT )) || true
+}
+
+# _aws_available — return 0 if AWS credentials are present for the test run.
+# Requires S3_BUCKET_NAME or BUCKET_LIST to be non-empty AND at least one of:
+# aws-config file readable, aws-credentials file readable, or
+# AWS_ACCESS_KEY_ID env var set.
+# Args: none
+_aws_available() {
+    local bucket="${S3_BUCKET_NAME:-${BUCKET_LIST:-}}"
+    [[ -n "${bucket}" ]] && {
+        [[ -r "${_aws_cfg:-/nonexistent}" ]] || \
+        [[ -r "${_aws_creds:-/nonexistent}" ]] || \
+        [[ -n "${AWS_ACCESS_KEY_ID:-}" ]]
+    }
+}
+
+# ---------------------------------------------------------------------------
+# setup — verify image, copy credentials, create scan archive, call hooks
+# ---------------------------------------------------------------------------
 setup() {
     [[ -n "${IMAGE}" ]] || {
         echo "ERROR: IMAGE is not set" >&2
@@ -208,42 +184,16 @@ setup() {
         return 1
     }
 
-    # Verify the image CMD is the expected service entrypoint.
-    # A mismatched CMD indicates a stale or wrong image.
-    local cmd
-    cmd=$(docker inspect "${IMAGE}" \
-              --format '{{json .Config.Cmd}}' 2>/dev/null || echo "")
-    if [[ "${cmd}" != '["/usr/local/bin/startup"]' ]]; then
-        echo "ERROR: unexpected CMD in ${IMAGE}" >&2
-        echo "       Got:      ${cmd}" >&2
-        echo "       Expected: [\"/usr/local/bin/startup\"]" >&2
-        echo "       Rebuild: ./build --no-scan" >&2
-        return 1
-    fi
-
-    # Verify the CLI binary exists in the image before running any test.
-    if ! docker run --rm "${IMAGE}" \
-            test -x /usr/local/bin/pg-volume-backup > /dev/null 2>&1; then
-        echo "ERROR: /usr/local/bin/pg-volume-backup not found in ${IMAGE}" >&2
-        echo "       Rebuild: ./build --no-scan" >&2
-        return 1
-    fi
-
-    # Resolve the AWS config file path once so each test does not re-derive it.
+    # AWS credential temp copies (world-readable for UID 10001 inside container)
     _aws_cfg="${AWS_CONFIG_FILE:-${HOME}/.secrets/aws-config}"
-
-    # The image runs as a non-root user (UID 10001).  A mode-600 config file
-    # owned by the host user is unreadable by that UID inside the container.
-    # Create a world-readable temp copy for the duration of the test run.
     _aws_cfg_mount="${_aws_cfg}"
     if [[ -r "${_aws_cfg}" ]]; then
         _aws_cfg_mount=$(mktemp /tmp/aws-config-staging-XXXXXX)
         cp "${_aws_cfg}" "${_aws_cfg_mount}"
         chmod 0644 "${_aws_cfg_mount}"
     fi
+    export _aws_cfg_mount
 
-    # Resolve the AWS credentials file; create a world-readable temp copy
-    # for the non-root container user, same as the config file above.
     _aws_creds="${AWS_CREDENTIALS_FILE:-${HOME}/.secrets/aws-credentials}"
     _aws_creds_mount="${_aws_creds}"
     if [[ -r "${_aws_creds}" ]]; then
@@ -251,55 +201,9 @@ setup() {
         cp "${_aws_creds}" "${_aws_creds_mount}"
         chmod 0644 "${_aws_creds_mount}"
     fi
+    export _aws_cfg _aws_creds _aws_creds_mount
 
-    # Run pg-volume-backup with optional AWS credential mounts.
-    # The caller is responsible for mounting BACKUP_ROOT volumes when needed.
-    run_pg_volume_backup() {
-        local aws_mounts=()
-        [[ -r "${_aws_cfg_mount}" ]] && \
-            aws_mounts+=(
-                -v "${_aws_cfg_mount}:/run/secrets/aws-config:ro"
-                -e "AWS_CONFIG_FILE=/run/secrets/aws-config"
-            )
-        [[ -r "${_aws_creds_mount}" ]] && \
-            aws_mounts+=(
-                -v "${_aws_creds_mount}:/run/secrets/aws-credentials:ro"
-                -e "AWS_SHARED_CREDENTIALS_FILE=/run/secrets/aws-credentials"
-            )
-        # shellcheck disable=SC2086
-        docker run --rm ${DOCKER_RUN_ARGS:-} \
-            -e "AWS_S3_BUCKET_NAME=${AWS_S3_BUCKET_NAME:-}" \
-            -e "DRYRUN=${DRYRUN:-false}" \
-            "${aws_mounts[@]}" \
-            "${IMAGE}" /usr/local/bin/pg-volume-backup "$@" 2>&1
-    }
-
-    # Run an aws CLI command inside the image, bypassing the pg-volume-backup
-    # CMD.  Used for bucket lifecycle operations in test_staging_backup_e2e.
-    _aws() {
-        local aws_mounts=() aws_env=()
-        if [[ -r "${_aws_cfg_mount}" ]]; then
-            aws_mounts+=(-v "${_aws_cfg_mount}:/run/secrets/aws-config:ro")
-            aws_env+=(-e "AWS_CONFIG_FILE=/run/secrets/aws-config")
-        fi
-        if [[ -r "${_aws_creds_mount}" ]]; then
-            aws_mounts+=(-v "${_aws_creds_mount}:/run/secrets/aws-credentials:ro")
-            aws_env+=(-e "AWS_SHARED_CREDENTIALS_FILE=/run/secrets/aws-credentials")
-        fi
-        # shellcheck disable=SC2086
-        docker run --rm --entrypoint /usr/bin/aws \
-            ${DOCKER_RUN_ARGS:-} \
-            "${aws_mounts[@]}" \
-            "${aws_env[@]}" \
-            "${IMAGE}" "$@"
-    }
-
-    export _aws_cfg _aws_cfg_mount _aws_creds _aws_creds_mount
-    export -f _aws run_pg_volume_backup
-
-    # Create a shared image archive for Trivy, Grype, and Dive — avoids
-    # mounting the Docker socket inside scanner containers, which hangs on
-    # macOS Docker Desktop.
+    # Scan archive (shared by Trivy, Grype, and Dive; avoids Docker socket mount)
     _scan_tar=""
     if [[ "${_SCAN}" == "true" || "${_ADVISE_GRYPE}" == "true" \
             || "${_ADVISE_DIVE}" == "true" ]]; then
@@ -308,580 +212,101 @@ setup() {
     fi
     export _scan_tar
 
-    # Clean up temp files on exit (world-readable credential copies + scan archive).
     # shellcheck disable=SC2064
     trap 'rm -f "${_aws_cfg_mount}" "${_aws_creds_mount}" "${_scan_tar}"' EXIT
-}
 
-# _skip prints a SKIP notice, increments the shared skip counter, and returns 0
-# so the test is not counted as a failure.
-_SKIP_COUNT=0
-_skip() {
-    echo "SKIP '${FUNCNAME[1]}': $*"
-    (( ++_SKIP_COUNT )) || true
-}
-
-# _aws_available returns 0 when AWS credentials are present.
-_aws_available() {
-    [[ -r "${_aws_cfg_mount:-/nonexistent}" ]] || \
-    [[ -r "${_aws_creds_mount:-/nonexistent}" ]] || \
-    [[ -n "${AWS_ACCESS_KEY_ID:-}" ]]
-}
-
-# ── AWS-independent tests ─────────────────────────────────────────────────────
-# These exercise CLI option parsing only; no S3 connection is attempted.
-
-test_staging_help() {
-    local output result=0
-    output=$(run_pg_volume_backup --help 2>&1) || result=$?
-    if [[ ${result} -eq 0 ]] && echo "${output}" | grep -q 'Usage:'; then
-        echo "PASS '${FUNCNAME[0]}': --help exits 0 and prints usage"
-    else
-        echo "FAIL '${FUNCNAME[0]}': --help failed (exit=${result})"
-        return 1
+    # Call repo-specific hook for docker-run helper definitions
+    if declare -F setup_hooks > /dev/null 2>&1; then
+        setup_hooks
     fi
 }
 
-test_staging_version() {
-    local output result=0
-    output=$(run_pg_volume_backup --version 2>&1) || result=$?
-    if [[ ${result} -eq 0 ]] && [[ -n "${output}" ]]; then
-        echo "PASS '${FUNCNAME[0]}': --version exits 0 and prints: ${output}"
-    else
-        echo "FAIL '${FUNCNAME[0]}': --version failed (exit=${result})"
-        return 1
-    fi
-}
-
-test_staging_unknown_option() {
-    local result=0
-    run_pg_volume_backup --no-such-option > /dev/null 2>&1 || result=$?
-    if [[ ${result} -ne 0 ]]; then
-        echo "PASS '${FUNCNAME[0]}': exits non-zero for unknown option"
-    else
-        echo "FAIL '${FUNCNAME[0]}': should have exited non-zero" \
-             "for unknown option"
-        return 1
-    fi
-}
-
-test_staging_no_bucket() {
-    # Run pg-volume-backup without AWS_S3_BUCKET_NAME; must exit non-zero.
-    # Uses plain docker run (not run_pg_volume_backup) to avoid injecting the
-    # caller's AWS_S3_BUCKET_NAME from the outer environment.
-    local result=0
-    # shellcheck disable=SC2086
-    docker run --rm ${DOCKER_RUN_ARGS:-} \
-        "${IMAGE}" /usr/local/bin/pg-volume-backup \
-        > /dev/null 2>&1 || result=$?
-    if [[ ${result} -ne 0 ]]; then
-        echo "PASS '${FUNCNAME[0]}': exits non-zero without AWS_S3_BUCKET_NAME"
-    else
-        echo "FAIL '${FUNCNAME[0]}': should have exited non-zero" \
-             "without AWS_S3_BUCKET_NAME"
-        return 1
-    fi
-}
-
-test_staging_no_volumes() {
-    # AWS_S3_BUCKET_NAME set, but BACKUP_ROOT contains no subdirectories.
-    local tmpdir result=0
-    tmpdir=$(mktemp -d /tmp/staging-novol-XXXXXX)
-    chmod o+rx "${tmpdir}"
-
-    # shellcheck disable=SC2086
-    docker run --rm ${DOCKER_RUN_ARGS:-} \
-        -e "AWS_S3_BUCKET_NAME=test-bucket" \
-        -e "BACKUP_ROOT=/backup" \
-        -v "${tmpdir}:/backup:ro" \
-        "${IMAGE}" /usr/local/bin/pg-volume-backup \
-        > /dev/null 2>&1 || result=$?
-    rm -rf "${tmpdir}"
-
-    if [[ ${result} -ne 0 ]]; then
-        echo "PASS '${FUNCNAME[0]}': exits non-zero with empty BACKUP_ROOT"
-    else
-        echo "FAIL '${FUNCNAME[0]}': should have exited non-zero" \
-             "with empty BACKUP_ROOT"
-        return 1
-    fi
-}
-
-test_staging_dryrun() {
-    # --dry-run with a synthetic volume and a mock bucket exits 0 and makes
-    # no S3 calls.
-    local tmpdir result=0 output
-    tmpdir=$(mktemp -d /tmp/staging-dryrun-XXXXXX)
-    mkdir -p "${tmpdir}/uploads"
-    echo "test file" > "${tmpdir}/uploads/document.pdf"
-    chmod -R o+rx "${tmpdir}"
-
-    # shellcheck disable=SC2086
-    output=$(docker run --rm ${DOCKER_RUN_ARGS:-} \
-        -e "AWS_S3_BUCKET_NAME=test-bucket" \
-        -e "BACKUP_ROOT=/backup" \
-        -e "BACKUP_HOSTNAME=staging-test" \
-        -v "${tmpdir}:/backup:ro" \
-        "${IMAGE}" /usr/local/bin/pg-volume-backup --dry-run \
-        2>&1) || result=$?
-    rm -rf "${tmpdir}"
-
-    if [[ ${result} -eq 0 ]]; then
-        echo "PASS '${FUNCNAME[0]}': --dry-run exits 0 with synthetic volume"
-    else
-        echo "FAIL '${FUNCNAME[0]}': --dry-run exited non-zero (exit=${result})"
-        printf '  -- output --\n' >&2
-        printf '%s\n' "${output}" >&2
-        return 1
-    fi
-}
-
-# ── Cron service-mode tests ───────────────────────────────────────────────────
-# These tests start the container via its CMD (/usr/local/bin/startup) and
-# exercise the async service path: startup → crond → backup →
-# pg-volume-backup.  Two of the three tests wait up to 90s for the first
-# cron tick; use --skip-cron when fast iteration matters more than coverage.
-
-# test_staging_cron_startup: service mode initializes correctly.
-#
-# Starts the container with the default @daily schedule so no backup fires
-# during the test.  Verifies that startup writes the env file, installs the
-# crontab, starts crond, and that the healthcheck probe returns 0.
-test_staging_cron_startup() {
-    local cid result=0
-    # shellcheck disable=SC2086
-    cid=$(docker run --detach \
-        -e "AWS_S3_BUCKET_NAME=test-bucket" \
-        -e "BACKUP_ROOT=/backup" \
-        -e "CRON_EXPRESSION=@daily" \
-        ${DOCKER_RUN_ARGS:-} \
-        "${IMAGE}" 2>&1) || result=$?
-    if [[ ${result} -ne 0 ]]; then
-        echo "FAIL '${FUNCNAME[0]}': could not start container" \
-             "(exit=${result})"
-        return 1
-    fi
-    # Use rm -f so cleanup works whether the container is running or exited.
-    # shellcheck disable=SC2064
-    trap "docker rm -f '${cid}' > /dev/null 2>&1 || true" RETURN
-
-    # Allow startup to complete before probing.
-    sleep 3
-
-    # Check that the container is still running; a quick exit means startup
-    # failed — report the logs and bail rather than misreporting as a
-    # healthcheck failure.
-    local running
-    running=$(docker inspect \
-        --format '{{.State.Running}}' "${cid}" 2>/dev/null \
-        || echo "false")
-    if [[ "${running}" != "true" ]]; then
-        local logs
-        logs=$(docker logs "${cid}" 2>&1 \
-            || echo "(no logs — container already removed)")
-        echo "FAIL '${FUNCNAME[0]}': container exited during startup"
-        printf '  -- container logs --\n' >&2
-        printf '%s\n' "${logs}" >&2
-        return 1
-    fi
-
-    local hc_result=0
-    docker exec "${cid}" /usr/local/bin/healthcheck \
-        > /dev/null 2>&1 || hc_result=$?
-    if [[ ${hc_result} -eq 0 ]]; then
-        echo "PASS '${FUNCNAME[0]}': service mode started;" \
-             "healthcheck passes"
-    else
-        local logs
-        logs=$(docker logs "${cid}" 2>&1)
-        echo "FAIL '${FUNCNAME[0]}': healthcheck failed" \
-             "(exit=${hc_result})"
-        printf '  -- container logs --\n' >&2
-        printf '%s\n' "${logs}" >&2
-        return 1
-    fi
-}
-
-# test_staging_cron_dryrun: cron fires backup in service mode.
-#
-# Overrides COMMAND to invoke pg-volume-backup with --dry-run so no S3
-# calls are made and no credentials are needed.  Sets CRON_EXPRESSION to
-# every minute and polls container logs for the pg-volume-backup finish
-# line, with a 90s timeout.
-test_staging_cron_dryrun() {
-    local tmpdir result=0
-    tmpdir=$(mktemp -d /tmp/staging-cron-XXXXXX)
-    mkdir -p "${tmpdir}/uploads"
-    echo "test file" > "${tmpdir}/uploads/document.pdf"
-    chmod -R o+rx "${tmpdir}"
-
-    local cid
-    # shellcheck disable=SC2086
-    cid=$(docker run --detach \
-        -e "AWS_S3_BUCKET_NAME=test-bucket" \
-        -e "BACKUP_ROOT=/backup" \
-        -e "BACKUP_HOSTNAME=staging-cron-test" \
-        -e "CRON_EXPRESSION=* * * * *" \
-        -e "COMMAND=/usr/local/bin/pg-volume-backup --dry-run" \
-        -v "${tmpdir}:/backup:ro" \
-        ${DOCKER_RUN_ARGS:-} \
-        "${IMAGE}" 2>&1) || result=$?
-
-    if [[ ${result} -ne 0 ]]; then
-        rm -rf "${tmpdir}"
-        echo "FAIL '${FUNCNAME[0]}': could not start container" \
-             "(exit=${result})"
-        return 1
-    fi
-    # shellcheck disable=SC2064
-    trap "docker rm -f '${cid}' > /dev/null 2>&1 || true; rm -rf '${tmpdir}'" RETURN
-
-    # Poll every 5s for up to 90s for evidence the backup completed.
-    local fired=false elapsed=0
-    while [[ ${elapsed} -lt 90 ]]; do
-        sleep 5
-        elapsed=$(( elapsed + 5 ))
-        if docker logs "${cid}" 2>&1 \
-                | grep -q '\[INFO\].*finish pg-volume-backup'; then
-            fired=true
-            break
-        fi
-    done
-
-    if "${fired}"; then
-        echo "PASS '${FUNCNAME[0]}': cron fired backup in service" \
-             "mode (dry-run)"
-    else
-        local logs
-        logs=$(docker logs "${cid}" 2>&1)
-        echo "FAIL '${FUNCNAME[0]}': cron did not fire within 90s"
-        printf '  -- container logs --\n' >&2
-        printf '%s\n' "${logs}" >&2
-        return 1
-    fi
-}
-
-# test_staging_cron_backup_e2e: end-to-end backup correctness via cron.
-#
-# Mirrors test_staging_backup_e2e but exercises the async service path
-# (startup → crond → backup → pg-volume-backup) instead of direct CLI
-# invocation.  Creates a disposable bucket, starts the container in service
-# mode with a 1-minute schedule, waits up to 90s for the first cron tick,
-# then verifies 4 S3 objects (2 archives + 2 checksums for 2 volumes).
-#
-# Required IAM permissions (on test.pg-volume-backup-*):
-#   s3:CreateBucket, s3:DeleteBucket, s3:PutObject, s3:GetObject,
-#   s3:ListBucket, s3:DeleteObject
-test_staging_cron_backup_e2e() {
-    _aws_available || {
-        _skip "AWS credentials not configured"
-        return 0
-    }
-
-    local epoch test_bucket tmpdir
-    epoch=$(date +%s)
-    test_bucket="test.pg-volume-backup-${epoch}"
-    tmpdir=$(mktemp -d /tmp/staging-cron-e2e-XXXXXX)
-
-    # Always remove the transient bucket and temp dir on return.
-    # shellcheck disable=SC2064
-    trap "
-        _aws s3 rb 's3://${test_bucket}' --force > /dev/null 2>&1 || true
-        rm -rf '${tmpdir}'
-    " RETURN
-
-    printf '  creating transient test bucket s3://%s...\n' \
-        "${test_bucket}" >&2
-    _aws s3 mb "s3://${test_bucket}" > /dev/null 2>&1 || {
-        echo "FAIL '${FUNCNAME[0]}': could not create bucket" \
-             "(check s3:CreateBucket on test.pg-volume-backup-*)"
-        return 1
-    }
-
-    mkdir -p "${tmpdir}/uploads" "${tmpdir}/data"
-    echo "fake-pdf-content" > "${tmpdir}/uploads/document.pdf"
-    echo "fake-data"        > "${tmpdir}/data/file.dat"
-    chmod -R o+rx "${tmpdir}"
-
-    local aws_mounts=()
-    [[ -r "${_aws_cfg_mount}" ]] && \
-        aws_mounts+=(
-            -v "${_aws_cfg_mount}:/run/secrets/aws-config:ro"
-            -e "AWS_CONFIG_FILE=/run/secrets/aws-config"
-        )
-    [[ -r "${_aws_creds_mount}" ]] && \
-        aws_mounts+=(
-            -v "${_aws_creds_mount}:/run/secrets/aws-credentials:ro"
-            -e "AWS_SHARED_CREDENTIALS_FILE=/run/secrets/aws-credentials"
-        )
-
-    printf '  starting service container (cron every minute)...\n' >&2
-    local cid cid_result=0
-    # shellcheck disable=SC2086
-    cid=$(docker run --detach \
-        -e "AWS_S3_BUCKET_NAME=${test_bucket}" \
-        -e "BACKUP_ROOT=/backup" \
-        -e "BACKUP_HOSTNAME=staging-cron-test" \
-        -e "CRON_EXPRESSION=* * * * *" \
-        -e "COMPRESSION=none" \
-        -v "${tmpdir}:/backup:ro" \
-        "${aws_mounts[@]}" \
-        ${DOCKER_RUN_ARGS:-} \
-        "${IMAGE}" 2>&1) || cid_result=$?
-    if [[ ${cid_result} -ne 0 ]]; then
-        echo "FAIL '${FUNCNAME[0]}': could not start container" \
-             "(exit=${cid_result})"
-        return 1
-    fi
-
-    # Extend the RETURN trap to also remove the container.
-    # shellcheck disable=SC2064
-    trap "
-        docker rm -f '${cid}' > /dev/null 2>&1 || true
-        _aws s3 rb 's3://${test_bucket}' --force > /dev/null 2>&1 || true
-        rm -rf '${tmpdir}'
-    " RETURN
-
-    # Poll every 5s for up to 90s for a completed backup.
-    printf '  waiting for first cron tick (up to 90s)...\n' >&2
-    local fired=false elapsed=0
-    while [[ ${elapsed} -lt 90 ]]; do
-        sleep 5
-        elapsed=$(( elapsed + 5 ))
-        if docker logs "${cid}" 2>&1 \
-                | grep -q '\[INFO\].*finish backup'; then
-            fired=true
-            break
-        fi
-    done
-
-    if ! "${fired}"; then
-        local logs
-        logs=$(docker logs "${cid}" 2>&1)
-        echo "FAIL '${FUNCNAME[0]}': cron did not fire within 90s"
-        printf '  -- container logs --\n' >&2
-        printf '%s\n' "${logs}" >&2
-        return 1
-    fi
-
-    # Verify object count: 2 volumes × 2 objects = 4 total.
-    local count=0
-    count=$(_aws s3 ls --recursive "s3://${test_bucket}/" \
-                2>/dev/null | wc -l | tr -d ' ')
-
-    if [[ "${count}" -eq 4 ]]; then
-        echo "PASS '${FUNCNAME[0]}': ${count} objects in S3 after" \
-             "cron backup (2 archives + 2 checksums for 2 volumes)"
-    else
-        local bk_logs
-        bk_logs=$(docker logs "${cid}" 2>&1)
-        echo "FAIL '${FUNCNAME[0]}': ${count} objects in S3 (expected 4)"
-        printf 'Objects in bucket:\n' >&2
-        _aws s3 ls --recursive "s3://${test_bucket}/" >&2 2>&1 || true
-        printf 'Container logs:\n' >&2
-        printf '%s\n' "${bk_logs}" >&2
-        return 1
-    fi
-}
-
-# ── AWS-dependent tests ───────────────────────────────────────────────────────
-
-# test_staging_backup_e2e: end-to-end backup correctness test.
-#
-# Creates a disposable bucket named test.pg-volume-backup-<epoch>,
-# backs up two synthetic volumes (uploads/ and data/) to it without GPG
-# encryption or compression, then counts the resulting S3 objects.
-#
-# Each volume produces two objects: a .tar archive and a .tar.sha256
-# companion.  Two volumes × 2 objects = 4 objects total.
-#
-# The bucket is always removed in a RETURN trap, even on failure.
-# The Docker socket is NOT mounted, so no labeled containers are stopped —
-# the raw-tar pipeline runs unconditionally.
-#
-# Required IAM permissions (on test.pg-volume-backup-*):
-#   s3:CreateBucket, s3:DeleteBucket, s3:PutObject, s3:GetObject,
-#   s3:ListBucket, s3:DeleteObject
-test_staging_backup_e2e() {
-    _aws_available || {
-        _skip "AWS credentials not configured"
-        return 0
-    }
-
-    local epoch test_bucket tmpdir
-    epoch=$(date +%s)
-    test_bucket="test.pg-volume-backup-${epoch}"
-    tmpdir=$(mktemp -d /tmp/staging-e2e-XXXXXX)
-
-    # Always remove the transient bucket and temp dir on return.
-    # shellcheck disable=SC2064
-    trap "
-        _aws s3 rb 's3://${test_bucket}' --force > /dev/null 2>&1 || true
-        rm -rf '${tmpdir}'
-    " RETURN
-
-    # ── Create bucket ─────────────────────────────────────────────────────────
-    printf '  creating transient test bucket s3://%s...\n' \
-        "${test_bucket}" >&2
-    _aws s3 mb "s3://${test_bucket}" > /dev/null 2>&1 || {
-        echo "FAIL '${FUNCNAME[0]}': could not create bucket" \
-             "(check s3:CreateBucket on test.pg-volume-backup-*)"
-        return 1
-    }
-
-    # ── Populate synthetic volumes ────────────────────────────────────────────
-    # Two volume directories: uploads/ and data/.  One file each is
-    # sufficient to exercise the full archive + upload pipeline.
-    mkdir -p "${tmpdir}/uploads" "${tmpdir}/data"
-    echo "fake-pdf-content" > "${tmpdir}/uploads/document.pdf"
-    echo "fake-data"        > "${tmpdir}/data/file.dat"
-    chmod -R o+rx "${tmpdir}"
-
-    # ── Run backup ────────────────────────────────────────────────────────────
-    local aws_mounts=()
-    [[ -r "${_aws_cfg_mount}" ]] && \
-        aws_mounts+=(
-            -v "${_aws_cfg_mount}:/run/secrets/aws-config:ro"
-            -e "AWS_CONFIG_FILE=/run/secrets/aws-config"
-        )
-    [[ -r "${_aws_creds_mount}" ]] && \
-        aws_mounts+=(
-            -v "${_aws_creds_mount}:/run/secrets/aws-credentials:ro"
-            -e "AWS_SHARED_CREDENTIALS_FILE=/run/secrets/aws-credentials"
-        )
-    printf '  running backup to s3://%s...\n' "${test_bucket}" >&2
-    local bk_output bk_result=0
-    # shellcheck disable=SC2086
-    bk_output=$(docker run --rm ${DOCKER_RUN_ARGS:-} \
-        -e "AWS_S3_BUCKET_NAME=${test_bucket}" \
-        -e "BACKUP_ROOT=/backup" \
-        -e "BACKUP_HOSTNAME=staging-test" \
-        -e "COMPRESSION=none" \
-        -v "${tmpdir}:/backup:ro" \
-        "${aws_mounts[@]}" \
-        "${IMAGE}" /usr/local/bin/pg-volume-backup 2>&1) || bk_result=$?
-
-    if [[ ${bk_result} -ne 0 ]]; then
-        echo "FAIL '${FUNCNAME[0]}': pg-volume-backup exited" \
-             "non-zero (${bk_result})"
-        printf '  -- output --\n' >&2
-        printf '%s\n' "${bk_output}" >&2
-        return 1
-    fi
-
-    # ── Verify object count ───────────────────────────────────────────────────
-    # 2 volumes × 2 objects each (.tar + .tar.sha256) = 4 objects total.
-    local count=0
-    count=$(_aws s3 ls --recursive "s3://${test_bucket}/" \
-                2>/dev/null | wc -l | tr -d ' ')
-
-    if [[ "${count}" -eq 4 ]]; then
-        echo "PASS '${FUNCNAME[0]}': ${count} objects in S3" \
-             "(2 archives + 2 checksums for 2 volumes)"
-    else
-        echo "FAIL '${FUNCNAME[0]}': ${count} objects in S3 (expected 4)"
-        printf 'Objects in bucket:\n' >&2
-        _aws s3 ls --recursive "s3://${test_bucket}/" >&2 2>&1 || true
-        printf 'Backup output:\n' >&2
-        printf '%s\n' "${bk_output}" >&2
-        return 1
-    fi
-}
-
-# ── Scan / advise tests ───────────────────────────────────────────────────────
-
-# test_staging_trivy_scan: Trivy HIGH/CRITICAL image scan.
-# Mirrors build Stage 4.  Fails when unfixed HIGH/CRITICAL CVEs are found.
-# Skip with --no-scan for fast iteration during development.
+# ---------------------------------------------------------------------------
+# Scan / advise tests
+# ---------------------------------------------------------------------------
 test_staging_trivy_scan() {
     [[ "${_SCAN}" == "true" ]] || {
-        _skip "--no-scan: Trivy scan skipped"
-        return 0
-    }
+        _skip "--no-scan: Trivy scan skipped"; return 0; }
     printf '  running Trivy scan on %s...\n' "${IMAGE}" >&2
-
+    local _extra=()
+    [[ "${_CACHE_SKIP_UPDATE_TRIVY}" == "true" ]] && {
+        echo "    Trivy DB update skipped (--cache skip-update=trivy)" >&2
+        _extra+=(--skip-db-update --skip-java-db-update); }
     local result=0
     docker run --rm \
         -v "${_scan_tar}:/scan.tar:ro" \
         -v "${TRIVY_CACHE_VOLUME}:/root/.cache/trivy" \
         "${TRIVY_IMAGE}:${TRIVY_TAG}" image \
-            --quiet \
-            --no-progress \
-            --exit-code 1 \
-            --ignore-unfixed \
-            --severity HIGH,CRITICAL \
+            --quiet --no-progress --exit-code 1 \
+            --ignore-unfixed --severity HIGH,CRITICAL \
             --timeout 5m \
+            "${_extra[@]}" \
             --input /scan.tar 2>&1 || result=$?
     if [[ ${result} -eq 0 ]]; then
         echo "PASS '${FUNCNAME[0]}': no unfixed HIGH/CRITICAL CVEs found"
     else
-        echo "FAIL '${FUNCNAME[0]}': unfixed HIGH/CRITICAL CVEs found" \
-             "(exit=${result})"
+        echo "FAIL '${FUNCNAME[0]}': unfixed HIGH/CRITICAL CVEs found (exit=${result})"
         return 1
     fi
 }
 
-# test_staging_grype_advise: Grype full-severity advisory scan.
-# Mirrors build Stage 5a.  Non-gating: findings are printed but never cause a
-# test failure.  Skipped when --no-advise is set, or when --no-scan is given
-# without an explicit --advise.
+# test_staging_grype_advise — run a Grype advisory scan against the staged
+# image archive.  Skipped when _ADVISE_GRYPE is not "true".  Never returns
+# non-zero (advisory only); scan output goes to stdout for the log.
+# Args: none (uses IMAGE, _scan_tar, GRYPE_* globals)
 test_staging_grype_advise() {
     [[ "${_ADVISE_GRYPE}" == "true" ]] || {
-        _skip "--no-advise grype: Grype advisory scan skipped"
-        return 0
-    }
+        _skip "--no-advise grype: Grype advisory scan skipped"; return 0; }
     printf '  running Grype advisory scan on %s...\n' "${IMAGE}" >&2
-    local _grype_extra_env=()
-    if [[ "${_CACHE_SKIP_UPDATE_GRYPE}" == "true" ]]; then
-        echo "    Grype DB update skipped for this run (--cache skip-update=grype)" >&2
-        _grype_extra_env+=(-e GRYPE_DB_AUTO_UPDATE=false)
-    fi
+    local _extra=()
+    [[ "${_CACHE_SKIP_UPDATE_GRYPE}" == "true" ]] && {
+        echo "    Grype DB update skipped (--cache skip-update=grype)" >&2
+        _extra+=(-e GRYPE_DB_AUTO_UPDATE=false); }
     docker run --rm \
         -v "${_scan_tar}:/scan.tar:ro" \
         -v "${GRYPE_CACHE_VOLUME}:/root/.cache/grype" \
-        "${_grype_extra_env[@]}" \
+        "${_extra[@]}" \
         "${GRYPE_IMAGE}:${GRYPE_TAG}" \
             docker-archive:/scan.tar 2>&1 || true
     echo "PASS '${FUNCNAME[0]}': Grype advisory scan complete (advisory only)"
 }
 
-# test_staging_scout_advise: Docker Scout CVE advisory scan.
-# Mirrors build Stage 5b.  Non-gating.
+# test_staging_scout_advise — run a Docker Scout CVE advisory scan against
+# the staged image.  Skipped when _ADVISE_SCOUT is not "true".  Never returns
+# non-zero (advisory only); scan output goes to stdout for the log.
+# Args: none (uses IMAGE global)
 test_staging_scout_advise() {
     [[ "${_ADVISE_SCOUT}" == "true" ]] || {
-        _skip "--no-advise scout: Docker Scout advisory scan skipped"
-        return 0
-    }
+        _skip "--no-advise scout: Docker Scout advisory scan skipped"; return 0; }
     printf '  running Docker Scout advisory scan on %s...\n' "${IMAGE}" >&2
     docker scout cves "${IMAGE}" 2>&1 || true
     echo "PASS '${FUNCNAME[0]}': Docker Scout advisory scan complete (advisory only)"
 }
 
-# test_staging_dive_advise: Dive image layer analysis.
-# Mirrors build Stage 5c.  Non-gating.
+# test_staging_dive_advise — run a Dive image-layer analysis against the
+# staged image archive.  Skipped when _ADVISE_DIVE is not "true".  Never
+# returns non-zero (advisory only); analysis output goes to stdout for the log.
+# Args: none (uses _scan_tar, DIVE_* globals)
 test_staging_dive_advise() {
     [[ "${_ADVISE_DIVE}" == "true" ]] || {
-        _skip "--no-advise dive: Dive layer analysis skipped"
-        return 0
-    }
+        _skip "--no-advise dive: Dive layer analysis skipped"; return 0; }
     printf '  running Dive layer analysis on %s...\n' "${IMAGE}" >&2
     docker run --rm \
         -v "${_scan_tar}:/scan.tar:ro" \
         "${DIVE_IMAGE}:${DIVE_TAG}" \
-            --source docker-archive \
-            --ci \
+            --source docker-archive --ci \
             /scan.tar 2>&1 || true
     echo "PASS '${FUNCNAME[0]}': Dive layer analysis complete (advisory only)"
 }
 
-# test_staging_coverage_advise: kcov bash line-coverage report.
-# Mirrors build Stage 5d.  Non-gating: results are printed but never cause a
-# test failure.  Skipped when --no-coverage or --no-advise is set.
+# test_staging_coverage_advise — run the kcov coverage advisory analysis.
+# Skipped when _ADVISE_COVERAGE is not "true".  Mounts the project root read-
+# only and runs bats-coverage via the shared bats-kcov sidecar image.  Never
+# returns non-zero (advisory only).
+# Args: none (uses BATS_KCOV_*, coverage.test_files globals)
 test_staging_coverage_advise() {
     [[ "${_ADVISE_COVERAGE}" == "true" ]] || {
-        _skip "--no-coverage: coverage analysis skipped"
-        return 0
-    }
+        _skip "--no-coverage: coverage analysis skipped"; return 0; }
     local script_dir
     script_dir=$(dirname "$(readlink -f "$0")")
     printf '  running kcov coverage analysis...\n' >&2
@@ -893,240 +318,299 @@ test_staging_coverage_advise() {
         "${BATS_KCOV_IMAGE}:${BATS_KCOV_TAG}" \
         bats-coverage \
             test/00-coverage.bats \
-            test/01-build.bats \
-            test/02-pg-volume-backup.bats \
-            test/03-backup-required-vars.bats \
-            test/04-backup-success.bats \
-            test/05-backup-encryption.bats \
-            test/06-healthcheck.bats \
-            test/07-image-metadata.bats \
         >&2 || true
     echo "PASS '${FUNCNAME[0]}': coverage analysis complete (advisory only)"
 }
 
 # ---------------------------------------------------------------------------
+# Shared staging helpers
+# ---------------------------------------------------------------------------
+# _append_aws_mounts <array_ref>: append -v/-e flags for AWS config and
+# credentials mounts to the named array.  _aws_cfg_mount and _aws_creds_mount
+# are set and exported by setup() before setup_hooks() runs.
+_append_aws_mounts() {
+    local -n _amr=$1
+    if [[ -r "${_aws_cfg_mount:-/nonexistent}" ]]; then
+        _amr+=(-v "${_aws_cfg_mount}:/run/secrets/aws-config:ro"
+               -e "AWS_CONFIG_FILE=/run/secrets/aws-config")
+    fi
+    if [[ -r "${_aws_creds_mount:-/nonexistent}" ]]; then
+        _amr+=(-v "${_aws_creds_mount}:/run/secrets/aws-credentials:ro"
+               -e "AWS_SHARED_CREDENTIALS_FILE=/run/secrets/aws-credentials")
+    fi
+}
+
+# _wait_for_log_pattern <container> <grep_pattern> <timeout_s>
+# Polls docker logs every 10s until <grep_pattern> matches or <timeout_s>
+# elapses.  Sets _WAIT_ELAPSED to elapsed seconds.  Progress to stderr.
+# Returns 0 if pattern found, 1 if timed out.
+_wait_for_log_pattern() {
+    local _ctr="$1" _pat="$2" _tmo="$3"
+    local _elapsed=0 _interval=10 _last
+    _WAIT_ELAPSED=0
+    while [[ ${_elapsed} -lt ${_tmo} ]]; do
+        sleep "${_interval}"
+        _elapsed=$(( _elapsed + _interval ))
+        if docker logs "${_ctr}" 2>&1 | grep -q "${_pat}"; then
+            _WAIT_ELAPSED=${_elapsed}
+            return 0
+        fi
+        _last=$(docker logs --tail 1 "${_ctr}" 2>&1)
+        printf '  [%ds] waiting... (last: %s)\n' "${_elapsed}" "${_last}" >&2
+    done
+    _WAIT_ELAPSED=${_elapsed}
+    return 1
+}
+
+# Short-circuit --help before sourcing hooks (works even without hooks file).
+for _arg in "$@"; do
+    if [[ "${_arg}" == "-h" || "${_arg}" == "--help" ]]; then
+        show_help; exit 0
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# Repo-specific helpers and test implementations (staging-hooks.sh)
+# ---------------------------------------------------------------------------
+_hooks_file="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/staging-hooks.sh"
+if [[ ! -f "${_hooks_file}" ]]; then
+    echo "ERROR: staging-hooks.sh not found: ${_hooks_file}" >&2
+    exit 1
+fi
+# shellcheck source=/dev/null
+source "${_hooks_file}"
+
+# ---------------------------------------------------------------------------
+# Test catalog
+#
+# Three parallel associative arrays keyed by test-function name:
+#   _TEST_KIND        — category tag (see below)
+#   _TEST_DESTRUCTIVE — true if the test can modify or delete live data;
+#                       these are skipped when --skip-e2e is passed
+#   _TEST_REQUIRES    — comma-separated capabilities that must be
+#                       present; test is skipped if any are unmet
+#
+# Kind tags:
+#   cli    — validates flags/arguments; no live services needed
+#   scan   — security scanner (Trivy, Grype)
+#   advise — advisory only: Dive, kcov; never block the run
+#   switch — tests behavioral flags; no live AWS or network needed
+#   aws    — requires S3_BUCKET_NAME + AWS credentials
+#   cron   — tests scheduler behavior inside the container
+#
+# Capability requirements (values in _TEST_REQUIRES):
+#   aws    — S3_BUCKET_NAME set + at least one AWS credential source
+#   host   — HOST env var set (live target reachable)
+#
+# Test function bodies live in test/staging-hooks.sh.
+# ---------------------------------------------------------------------------
+_ALL_TESTS=()
+declare -A _TEST_KIND=()
+declare -A _TEST_DESTRUCTIVE=()
+declare -A _TEST_REQUIRES=()
+
+# ---------------------------------------------------------------------------
 # Test runner
 # ---------------------------------------------------------------------------
-
+# shellcheck disable=SC2034
+# run_tests — iterate over _ALL_TESTS, apply skip rules, call each test
+# function, and print a PASS/FAIL/SKIP summary.
+# Honors _ONLY_TEST (run a single named test), _SKIP_E2E (skip destructive
+# tests), and _meets_requirement (skip tests whose required capability is
+# absent).  Sets _SKIP_COUNT for the final summary arithmetic.
+# Args: none (reads global test-catalog arrays _ALL_TESTS, _TEST_KIND, etc.)
 run_tests() {
-    local all_tests=(
-        test_staging_help
-        test_staging_version
-        test_staging_unknown_option
-        test_staging_trivy_scan
-        test_staging_grype_advise
-        test_staging_scout_advise
-        test_staging_dive_advise
-        test_staging_coverage_advise
-        test_staging_no_bucket
-        test_staging_no_volumes
-        test_staging_dryrun
-        test_staging_cron_startup
-        test_staging_cron_dryrun
-        test_staging_backup_e2e
-        test_staging_cron_backup_e2e
-    )
+    local -a tests=()
+    local t t_kind t_destr t_req unmet
 
-    # Apply --test, --skip-e2e, and --skip-cron filters.
-    local tests=()
     if [[ -n "${_ONLY_TEST}" ]]; then
-        local valid=false t
-        for t in "${all_tests[@]}"; do
+        local valid=false
+        for t in "${_ALL_TESTS[@]}"; do
             [[ "${t}" == "${_ONLY_TEST}" ]] && valid=true && break
         done
         if ! "${valid}"; then
             echo "ERROR: unknown test '${_ONLY_TEST}'" >&2
             printf '       Available tests:\n' >&2
-            printf '         %s\n' "${all_tests[@]}" >&2
+            printf '         %s\n' "${_ALL_TESTS[@]}" >&2
             return 1
         fi
         tests=("${_ONLY_TEST}")
     else
-        for t in "${all_tests[@]}"; do
-            [[ "${t}" == "test_staging_backup_e2e" \
-                && "${_SKIP_E2E}" == "true" ]] && continue
-            [[ "${t}" == "test_staging_cron_backup_e2e" \
-                && ("${_SKIP_E2E}" == "true" \
-                    || "${_SKIP_CRON}" == "true") ]] && continue
-            [[ ("${t}" == "test_staging_cron_startup" \
-                || "${t}" == "test_staging_cron_dryrun") \
-                && "${_SKIP_CRON}" == "true" ]] && continue
+        for t in "${_ALL_TESTS[@]}"; do
+            t_destr="${_TEST_DESTRUCTIVE[${t}]:-false}"
+            [[ "${t_destr}" == "true" && "${_SKIP_E2E}" == "true" ]] && continue
             tests+=("${t}")
         done
     fi
 
-    setup || { echo "ERROR: Setup failed"; return 1; }
+    setup || { echo "ERROR: setup failed"; return 1; }
 
-    if [[ "${_CACHE_RESET_TRIVY}" == "true" ]]; then
+    [[ "${_CACHE_RESET_TRIVY}" == "true" ]] && {
         echo "==> Cache: reset Trivy DB" >&2
-        _reset_cache_db "${TRIVY_CACHE_VOLUME}"
-    fi
-    if [[ "${_CACHE_RESET_GRYPE}" == "true" ]]; then
+        _reset_cache_db "${TRIVY_CACHE_VOLUME}"; }
+    [[ "${_CACHE_RESET_GRYPE}" == "true" ]] && {
         echo "==> Cache: reset Grype DB" >&2
-        _reset_cache_db "${GRYPE_CACHE_VOLUME}"
-    fi
-
-    echo "Running staging tests for pg-volume-backup..."
-    echo "================================================="
-    echo "Image:  ${IMAGE}"
-    if _aws_available; then
-        echo "AWS:    credentials configured"
-    else
-        echo "AWS:    not configured — AWS-dependent tests will be skipped"
-    fi
-    [[ -n "${_ONLY_TEST}" ]]  && echo "Filter: --test ${_ONLY_TEST}"
-    "${_SKIP_E2E}"            && echo "Filter: --skip-e2e"
-    "${_SKIP_CRON}"           && echo "Filter: --skip-cron"
-    echo "Scan:   ${_SCAN} (Trivy HIGH/CRITICAL)"
-    echo "Advise: coverage=${_ADVISE_COVERAGE} dive=${_ADVISE_DIVE}" \
-         "grype=${_ADVISE_GRYPE} scout=${_ADVISE_SCOUT}"
-    echo "================================================="
+        _reset_cache_db "${GRYPE_CACHE_VOLUME}"; }
 
     _SKIP_COUNT=0
     local passed=0 failed=0
     for t in "${tests[@]}"; do
+        t_kind="${_TEST_KIND[${t}]:-cli}"
+        t_destr="${_TEST_DESTRUCTIVE[${t}]:-false}"
+        t_req="${_TEST_REQUIRES[${t}]:-}"
+
+        unmet=false
+        if [[ -n "${t_req}" ]]; then
+            local _reqs req
+            IFS=',' read -ra _reqs <<< "${t_req}"
+            for req in "${_reqs[@]}"; do
+                if ! _meets_requirement "${req}"; then
+                    _skip "${t} (requirement '${req}' not met)"
+                    unmet=true; break
+                fi
+            done
+        fi
+        "${unmet}" && continue
+
+        if ! declare -F "${t}" > /dev/null 2>&1; then
+            echo "ERROR: test function '${t}' not defined" \
+                 "(expected in test/staging-hooks.sh)" >&2
+            (( ++failed )) || true
+            continue
+        fi
+
         if "${t}"; then
             (( ++passed )) || true
         else
+            echo "FAIL '${t}'" >&2
             (( ++failed )) || true
         fi
     done
-    # Subtract skips from passed: skipped tests exit 0 but are not passes.
-    passed=$(( passed - _SKIP_COUNT ))
 
-    local total=${#tests[@]}
+    passed=$(( passed - _SKIP_COUNT ))
+    (( passed < 0 )) && passed=0
+    # _skip() increments _SKIP_COUNT and prints output, so skipped tests
+    # are counted in the running passed total above. Subtract them here so
+    # the final tally shows actual passes only.
+
+    local total="${#tests[@]}"
     echo "================================================="
     echo "Results: ${passed} passed, ${failed} failed," \
          "${_SKIP_COUNT} skipped (${total} run)"
     return "${failed}"
 }
 
+# _meets_requirement — return 0 if the requirement token is satisfied.
+# Used by run_tests to skip tests whose capability is absent at runtime.
+# Args: $1=requirement token (aws; all others pass unconditionally)
+_meets_requirement() {
+    # Maps requirement tokens to availability-check functions.
+    # Only 'aws' is meaningful for this profile; all other tokens
+    # pass unconditionally.
+    case "$1" in
+        aws) _aws_available ;;
+        *) return 0 ;;
+    esac
+}
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-
 main() {
-    require_option_value() {
-        local option="$1"
-        local value="${2:-}"
-        if [[ -z "${value}" || "${value}" == --* ]]; then
-            echo "Option ${option} requires a value" >&2
-            echo "Run 'test/staging --help' for usage." >&2
-            exit 1
-        fi
-    }
-
-    # ── Option parsing ────────────────────────────────────────────────────────
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --image)
-                require_option_value "$1" "${2:-}"
-                IMAGE="$2"
-                shift
-                ;;
-            --bucket)
-                require_option_value "$1" "${2:-}"
-                AWS_S3_BUCKET_NAME="$2"
-                shift
-                ;;
-            --aws-config)
-                require_option_value "$1" "${2:-}"
-                AWS_CONFIG_FILE="$2"
-                shift
-                ;;
-            --aws-credentials)
-                require_option_value "$1" "${2:-}"
-                AWS_CREDENTIALS_FILE="$2"
-                shift
-                ;;
-            --scan)         _SCAN=true   ;;
-            --no-scan)      _SCAN=false  ;;
-            --dryrun)       DRYRUN=true  ;;
-            --no-dryrun)    DRYRUN=false ;;
-            --no-coverage)  _ADVISE_COVERAGE=false ;;
+                [[ -n "${2:-}" ]] || {
+                    echo "Option $1 requires a value" >&2; exit 1; }
+                IMAGE="$2"; shift ;;
+            --bucket)           S3_BUCKET_NAME="$2";        shift ;;
+            --bucket-list)      BUCKET_LIST="$2";           shift ;;
+            --aws-config)       AWS_CONFIG_FILE="$2";       shift ;;
+            --aws-credentials)  AWS_CREDENTIALS_FILE="$2";  shift ;;
+            --dryrun)           DRYRUN=true  ;;
+            --no-dryrun)        DRYRUN=false ;;
+            --scan)             _SCAN=true   ;;
+            --no-scan)          _SCAN=false  ;;
+            --no-coverage)      _ADVISE_COVERAGE=false ;;
             --advise|--advice)
                 _ADVISE_EXPLICIT=true
                 if [[ $# -gt 1 && "$2" =~ \
                         ^(coverage|dive|grype|scout|all)(,(coverage|dive|grype|scout|all))*$ ]]; then
-                    advisements="$2"; shift
+                    local _adv_list="$2"; shift
                 else
-                    advisements="grype,scout"
+                    local _adv_list="grype,scout"
                 fi
-                _ADVISE_COVERAGE=false
-                _ADVISE_DIVE=false
-                _ADVISE_GRYPE=false
-                _ADVISE_SCOUT=false
-                IFS=',' read -ra adv_list <<< "$advisements"
-                for adv in "${adv_list[@]}"; do
-                    case "$adv" in
+                _ADVISE_COVERAGE=false; _ADVISE_DIVE=false
+                _ADVISE_GRYPE=false;    _ADVISE_SCOUT=false
+                local _adv
+                IFS=',' read -ra _advs <<< "${_adv_list}"
+                for _adv in "${_advs[@]}"; do
+                    case "${_adv}" in
                         coverage) _ADVISE_COVERAGE=true ;;
                         dive)     _ADVISE_DIVE=true ;;
                         grype)    _ADVISE_GRYPE=true ;;
                         scout)    _ADVISE_SCOUT=true ;;
-                        all) _ADVISE_COVERAGE=true; _ADVISE_DIVE=true
-                             _ADVISE_GRYPE=true; _ADVISE_SCOUT=true ;;
-                        *)   echo "Unknown advisement: $adv" >&2; exit 1 ;;
+                        all)
+                            _ADVISE_COVERAGE=true; _ADVISE_DIVE=true
+                            _ADVISE_GRYPE=true;    _ADVISE_SCOUT=true ;;
+                        *) echo "Unknown advisement: ${_adv}" >&2; exit 1 ;;
                     esac
                 done
                 ;;
             --no-advise)
-                _ADVISE_COVERAGE=false
-                _ADVISE_DIVE=false
-                _ADVISE_GRYPE=false
-                _ADVISE_SCOUT=false
+                _ADVISE_COVERAGE=false; _ADVISE_DIVE=false
+                _ADVISE_GRYPE=false;    _ADVISE_SCOUT=false
                 _ADVISE_EXPLICIT=true
                 ;;
             --cache)
                 [[ $# -ge 2 ]] || {
-                    echo "option '${1}' requires an argument" >&2; exit 1; }
+                    echo "option '$1' requires an argument" >&2; exit 1; }
                 _parse_cache_rules "$2"; shift
                 ;;
-            --yes)        _YES=true    ;;
-            --skip-e2e)   _SKIP_E2E=true ;;
-            --skip-cron)  _SKIP_CRON=true ;;
+            --yes)          _YES=true      ;;
+            --skip-e2e)     _SKIP_E2E=true ;;
             --test)
-                require_option_value "$1" "${2:-}"
-                _ONLY_TEST="$2"
-                shift
-                ;;
-            -h|--help)    show_help; exit 0 ;;
+                [[ -n "${2:-}" ]] || {
+                    echo "Option $1 requires a value" >&2; exit 1; }
+                _ONLY_TEST="$2"; shift ;;
+            -h|--help)      show_help; exit 0 ;;
             -*)
                 echo "Unknown option: $1" >&2
                 echo "Run 'test/staging --help' for usage." >&2
                 exit 1 ;;
             *)
-                # First non-option positional arg is the image.
                 if [[ -z "${IMAGE}" ]]; then
                     IMAGE="$1"
                 else
-                    echo "Unexpected argument: $1" >&2
-                    exit 1
-                fi ;;
+                    echo "Unexpected argument: $1" >&2; exit 1
+                fi
+                ;;
         esac
         shift
     done
 
-    # --no-scan implies --no-advise unless --advise was given explicitly.
+    # --no-scan implies --no-advise unless --advise was given explicitly
     if [[ "${_SCAN}" == "false" && "${_ADVISE_EXPLICIT}" == "false" ]]; then
-        _ADVISE_COVERAGE=false
-        _ADVISE_DIVE=false
-        _ADVISE_GRYPE=false
-        _ADVISE_SCOUT=false
+        _ADVISE_COVERAGE=false; _ADVISE_DIVE=false
+        _ADVISE_GRYPE=false;    _ADVISE_SCOUT=false
     fi
 
-    # Propagate resolved values so setup() and test functions see them.
-    export IMAGE AWS_S3_BUCKET_NAME AWS_CONFIG_FILE AWS_CREDENTIALS_FILE DRYRUN
-    export _YES _SKIP_E2E _SKIP_CRON _ONLY_TEST _SCAN
-    export _ADVISE_COVERAGE _ADVISE_DIVE _ADVISE_GRYPE _ADVISE_SCOUT
+    export IMAGE S3_BUCKET_NAME BUCKET_LIST AWS_CONFIG_FILE AWS_CREDENTIALS_FILE DRYRUN
+    export _YES _SKIP_E2E _ONLY_TEST _SCAN
+    export _ADVISE_COVERAGE _ADVISE_DIVE _ADVISE_GRYPE _ADVISE_SCOUT _ADVISE_EXPLICIT
     export _CACHE_RESET_TRIVY _CACHE_RESET_GRYPE
-    export _CACHE_SKIP_UPDATE_TRIVY _CACHE_SKIP_UPDATE_GRYPE
+    export _CACHE_SKIP_UPDATE_TRIVY _CACHE_SKIP_UPDATE_GRYPE DOCKER_RUN_ARGS
 
-    # ── Preflight summary ────────────────────────────────────────────────────
+    [[ -z "${BUCKET_LIST}" && -n "${S3_BUCKET_NAME}" ]] && BUCKET_LIST="${S3_BUCKET_NAME}"
+
+    # ── Preflight summary ─────────────────────────────────────────────────────
     local aws_cfg="${AWS_CONFIG_FILE:-${HOME}/.secrets/aws-config}"
     local aws_creds="${AWS_CREDENTIALS_FILE:-${HOME}/.secrets/aws-credentials}"
+    local bucket="${S3_BUCKET_NAME:-${BUCKET_LIST:-}}"
     local will_touch_aws=false
-    { [[ -r "${aws_cfg}" ]] || [[ -r "${aws_creds}" ]] \
-      || [[ -n "${AWS_ACCESS_KEY_ID:-}" ]]; } && \
+    [[ -n "${bucket}" ]] && \
+        { [[ -r "${aws_cfg}" ]] || [[ -r "${aws_creds}" ]] \
+          || [[ -n "${AWS_ACCESS_KEY_ID:-}" ]]; } && \
         will_touch_aws=true
 
     echo "================================================================"
@@ -1144,42 +628,54 @@ main() {
         || "${_ADVISE_GRYPE}" == "true" || "${_ADVISE_SCOUT}" == "true" ]] \
         && _advise_any=true
     if "${_advise_any}"; then
-        local _advise_list=()
-        [[ "${_ADVISE_COVERAGE}" == "true" ]] && _advise_list+=(coverage)
-        [[ "${_ADVISE_DIVE}"     == "true" ]] && _advise_list+=(dive)
-        [[ "${_ADVISE_GRYPE}"    == "true" ]] && _advise_list+=(grype)
-        [[ "${_ADVISE_SCOUT}"    == "true" ]] && _advise_list+=(scout)
+        local _adv_items=()
+        [[ "${_ADVISE_COVERAGE}" == "true" ]] && _adv_items+=(coverage)
+        [[ "${_ADVISE_DIVE}"     == "true" ]] && _adv_items+=(dive)
+        [[ "${_ADVISE_GRYPE}"    == "true" ]] && _adv_items+=(grype)
+        [[ "${_ADVISE_SCOUT}"    == "true" ]] && _adv_items+=(scout)
         local IFS=,
-        echo "  Advise:   ${_advise_list[*]} (--no-advise to skip)"
+        echo "  Advise:   ${_adv_items[*]} (--no-advise to skip)"
     elif [[ "${_SCAN}" == "false" && "${_ADVISE_EXPLICIT}" == "false" ]]; then
-        echo "  Advise:   skipped (implied by --no-scan; use --advise to enable)"
+        echo "  Advise:   skipped (implied by --no-scan)"
     else
         echo "  Advise:   skipped (--no-advise)"
     fi
-    if [[ "${DRYRUN}" == "true" ]]; then
-        echo "  Dry-run:  true — backup writes are suppressed"
-    fi
-    if "${_SKIP_CRON}"; then
-        echo "  Cron:     skipped (--skip-cron)"
-    else
-        echo "  Cron:     enabled (cron tests wait up to 90s;" \
-             "--skip-cron to skip)"
-    fi
     echo ""
+    # Bucket safety: force DRYRUN for non-test/staging buckets
+    local caution_bucket=false
+    if [[ -n "${bucket}" ]] && \
+       [[ "${bucket}" != test.* ]] && \
+       [[ "${bucket}" != staging.* ]]; then
+        caution_bucket=true
+        [[ "${DRYRUN}" != "false" ]] && { DRYRUN=true; export DRYRUN; }
+    fi
 
     if "${will_touch_aws}"; then
-        echo "  E2E test: will CREATE and DELETE a transient bucket:"
-        echo "            s3://test.pg-volume-backup-<epoch>"
-        echo "            2 synthetic volumes are backed up and verified."
-        echo "            Requires s3:CreateBucket + s3:PutObject +"
-        echo "            s3:DeleteBucket on test.pg-volume-backup-*"
+        echo "  Bucket:   s3://${bucket}"
+        if [[ "${DRYRUN}" == "true" ]]; then
+            echo "  Dry-run:  true — no objects will be deleted from this bucket"
+        else
+            echo "  Dry-run:  false — OBJECTS MAY BE DELETED FROM THIS BUCKET"
+        fi
+        echo ""
     else
         echo "  AWS:      not configured — AWS-dependent tests will be skipped"
+        echo ""
     fi
-    echo ""
 
-    # ── Confirmation ──────────────────────────────────────────────────────────
-    # Prompt only when real AWS will be touched; --yes skips for scripted use.
+    if "${caution_bucket}"; then
+        echo "  !! CAUTION !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+        echo "  !! bucket='${bucket}' does not start with 'test.' or 'staging.'"
+        if [[ "${DRYRUN}" == "true" ]]; then
+            echo "  !! DRYRUN forced true. Pass --no-dryrun to allow deletions."
+        else
+            echo "  !! --no-dryrun: objects MAY be deleted from S3."
+        fi
+        echo "  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+        echo ""
+    fi
+
+    # Confirmation prompt
     if "${will_touch_aws}"; then
         if "${_YES}"; then
             echo "  (--yes: skipping confirmation prompt)"
@@ -1189,10 +685,7 @@ main() {
             local response
             read -r response
             echo ""
-            if [[ "${response}" != "yes" ]]; then
-                echo "Aborted."
-                return 1
-            fi
+            [[ "${response}" != "yes" ]] && { echo "Aborted."; return 1; }
         fi
     fi
 
