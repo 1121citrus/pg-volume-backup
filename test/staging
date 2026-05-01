@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# 1121citrus.build-date 2026-05-01T00:52:40Z
-# 1121citrus.build-version 6bbe275c0778
+# 1121citrus.build-date 2026-05-01T22:43:55Z
+# 1121citrus.build-version c67f81956036
 
 # test/staging — functional staging tests for pg-volume-backup.
 #
@@ -74,6 +74,7 @@ _CACHE_RESET_TRIVY=false       # --cache reset=trivy: wipe Trivy DB volume
 _CACHE_RESET_GRYPE=false       # --cache reset=grype: wipe Grype DB volume
 _CACHE_SKIP_UPDATE_TRIVY=false  # --cache skip-update=trivy: keep existing DB
 _CACHE_SKIP_UPDATE_GRYPE=false  # --cache skip-update=grype: keep existing DB
+_TRIVY_IGNOREFILE=
 
 # ---------------------------------------------------------------------------
 # Utility functions
@@ -84,19 +85,26 @@ _set_cache_targets() {
     for target in "${_tgts[@]}"; do
         case "${target}" in
             trivy)
-                [[ "${mode}" == "reset" ]]       && _CACHE_RESET_TRIVY=true
-                [[ "${mode}" == "skip-update" ]] && _CACHE_SKIP_UPDATE_TRIVY=true
+                if [[ "${mode}" == "reset" ]]; then
+                    _CACHE_RESET_TRIVY=true
+                elif [[ "${mode}" == "skip-update" ]]; then
+                    _CACHE_SKIP_UPDATE_TRIVY=true
+                fi
                 ;;
             grype)
-                [[ "${mode}" == "reset" ]]       && _CACHE_RESET_GRYPE=true
-                [[ "${mode}" == "skip-update" ]] && _CACHE_SKIP_UPDATE_GRYPE=true
+                if [[ "${mode}" == "reset" ]]; then
+                    _CACHE_RESET_GRYPE=true
+                elif [[ "${mode}" == "skip-update" ]]; then
+                    _CACHE_SKIP_UPDATE_GRYPE=true
+                fi
                 ;;
             all)
-                [[ "${mode}" == "reset" ]] && {
-                    _CACHE_RESET_TRIVY=true; _CACHE_RESET_GRYPE=true; }
-                [[ "${mode}" == "skip-update" ]] && {
+                if [[ "${mode}" == "reset" ]]; then
+                    _CACHE_RESET_TRIVY=true; _CACHE_RESET_GRYPE=true
+                elif [[ "${mode}" == "skip-update" ]]; then
                     _CACHE_SKIP_UPDATE_TRIVY=true
-                    _CACHE_SKIP_UPDATE_GRYPE=true; }
+                    _CACHE_SKIP_UPDATE_GRYPE=true
+                fi
                 ;;
             *) echo "Unknown cache target: ${target}" >&2; exit 1 ;;
         esac
@@ -232,13 +240,24 @@ test_staging_trivy_scan() {
     [[ "${_CACHE_SKIP_UPDATE_TRIVY}" == "true" ]] && {
         echo "    Trivy DB update skipped (--cache skip-update=trivy)" >&2
         _extra+=(--skip-db-update --skip-java-db-update); }
+    local _trivyign_v=() _trivyign_a=()
+    if [[ -n "${_TRIVY_IGNOREFILE:-}" ]]; then
+        local _repo_dir
+        _repo_dir="$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")"
+        if [[ -f "${_repo_dir}/${_TRIVY_IGNOREFILE}" ]]; then
+            _trivyign_v+=(-v "${_repo_dir}/${_TRIVY_IGNOREFILE}:/.trivyignore:ro")
+            _trivyign_a+=(--ignorefile /.trivyignore)
+        fi
+    fi
     local result=0
     docker run --rm \
         -v "${_scan_tar}:/scan.tar:ro" \
         -v "${TRIVY_CACHE_VOLUME}:/root/.cache/trivy" \
+        "${_trivyign_v[@]}" \
         "${TRIVY_IMAGE}:${TRIVY_TAG}" image \
             --quiet --no-progress --exit-code 1 \
             --ignore-unfixed --severity HIGH,CRITICAL \
+            "${_trivyign_a[@]}" \
             --timeout 5m \
             "${_extra[@]}" \
             --input /scan.tar 2>&1 || result=$?
@@ -321,6 +340,90 @@ test_staging_coverage_advise() {
         >&2 || true
     echo "PASS '${FUNCNAME[0]}': coverage analysis complete (advisory only)"
 }
+
+# ---------------------------------------------------------------------------
+# Cron startup test
+# ---------------------------------------------------------------------------
+test_staging_cron_startup() {
+    local container_id
+    # shellcheck disable=SC2086
+    container_id=$(docker run -d ${DOCKER_RUN_ARGS:-} \
+        -e "AWS_S3_BUCKET_NAME=test.fake-bucket-for-startup-test" \
+        -e "CRON_EXPRESSION=@daily" \
+        "${IMAGE}")
+    printf '  container %s started; waiting for scheduler init...\n' \
+        "${container_id:0:12}" >&2
+
+    sleep 3
+
+    local running
+    running=$(docker inspect --format '{{.State.Running}}' "${container_id}" \
+        2>/dev/null || echo "false")
+
+    local crontab_ok=false
+    if [[ "${running}" == "true" ]]; then
+        docker exec "${container_id}" \
+            test -f /var/spool/cron/crontabs/pg-volume-backup \
+            > /dev/null 2>&1 && crontab_ok=true
+    fi
+
+    docker stop "${container_id}" > /dev/null 2>&1
+    docker rm   "${container_id}" > /dev/null 2>&1
+
+    if [[ "${running}" != "true" ]]; then
+        echo "FAIL '${FUNCNAME[0]}': container exited within 3s of startup"
+        return 1
+    fi
+    if ! "${crontab_ok}"; then
+        echo "FAIL '${FUNCNAME[0]}': crontab file not found" \
+             "(crontabs directory likely root-owned)"
+        return 1
+    fi
+    echo "PASS '${FUNCNAME[0]}': scheduler running and crontab written"
+}
+
+# ---------------------------------------------------------------------------
+# CLI smoke tests
+# ---------------------------------------------------------------------------
+test_staging_help() {
+    local output result=0
+    output=$(run_pg_volume_backup --help 2>&1) || result=$?
+    if [[ ${result} -eq 0 ]] && echo "${output}" | grep -q 'Usage:'; then
+        echo "PASS '${FUNCNAME[0]}': --help exits 0 and prints usage"
+    else
+        echo "FAIL '${FUNCNAME[0]}': --help failed (exit=${result})"
+        return 1
+    fi
+}
+
+# test_staging_version — verify the tool prints a non-empty version string
+# and exits 0 for --version.
+# Args: none (uses run_tool global set during staging setup)
+test_staging_version() {
+    local output result=0
+    output=$(run_pg_volume_backup --version 2>&1) || result=$?
+    if [[ ${result} -eq 0 ]] && [[ -n "${output}" ]]; then
+        echo "PASS '${FUNCNAME[0]}': --version exits 0 and prints: ${output}"
+    else
+        echo "FAIL '${FUNCNAME[0]}': --version failed (exit=${result})"
+        return 1
+    fi
+}
+
+# test_staging_unknown_option — verify the tool exits non-zero for an
+# unrecognized flag, confirming that argument parsing rejects garbage input.
+# Args: none (uses run_tool global set during staging setup)
+test_staging_unknown_option() {
+    local result=0
+    run_pg_volume_backup --no-such-option > /dev/null 2>&1 || result=$?
+    if [[ ${result} -ne 0 ]]; then
+        echo "PASS '${FUNCNAME[0]}': exits non-zero for unknown option"
+    else
+        echo "FAIL '${FUNCNAME[0]}': should have exited non-zero for unknown option"
+        return 1
+    fi
+}
+
 
 # ---------------------------------------------------------------------------
 # Shared staging helpers
@@ -408,6 +511,66 @@ _ALL_TESTS=()
 declare -A _TEST_KIND=()
 declare -A _TEST_DESTRUCTIVE=()
 declare -A _TEST_REQUIRES=()
+_ALL_TESTS+=(test_staging_help)
+_TEST_KIND[test_staging_help]=cli
+_TEST_DESTRUCTIVE[test_staging_help]=false
+_TEST_REQUIRES[test_staging_help]=''
+_ALL_TESTS+=(test_staging_version)
+_TEST_KIND[test_staging_version]=cli
+_TEST_DESTRUCTIVE[test_staging_version]=false
+_TEST_REQUIRES[test_staging_version]=''
+_ALL_TESTS+=(test_staging_unknown_option)
+_TEST_KIND[test_staging_unknown_option]=cli
+_TEST_DESTRUCTIVE[test_staging_unknown_option]=false
+_TEST_REQUIRES[test_staging_unknown_option]=''
+_ALL_TESTS+=(test_staging_trivy_scan)
+_TEST_KIND[test_staging_trivy_scan]=scan
+_TEST_DESTRUCTIVE[test_staging_trivy_scan]=false
+_TEST_REQUIRES[test_staging_trivy_scan]=''
+_ALL_TESTS+=(test_staging_coverage_advise)
+_TEST_KIND[test_staging_coverage_advise]=advise
+_TEST_DESTRUCTIVE[test_staging_coverage_advise]=false
+_TEST_REQUIRES[test_staging_coverage_advise]=''
+_ALL_TESTS+=(test_staging_dive_advise)
+_TEST_KIND[test_staging_dive_advise]=advise
+_TEST_DESTRUCTIVE[test_staging_dive_advise]=false
+_TEST_REQUIRES[test_staging_dive_advise]=''
+_ALL_TESTS+=(test_staging_grype_advise)
+_TEST_KIND[test_staging_grype_advise]=advise
+_TEST_DESTRUCTIVE[test_staging_grype_advise]=false
+_TEST_REQUIRES[test_staging_grype_advise]=''
+_ALL_TESTS+=(test_staging_scout_advise)
+_TEST_KIND[test_staging_scout_advise]=advise
+_TEST_DESTRUCTIVE[test_staging_scout_advise]=false
+_TEST_REQUIRES[test_staging_scout_advise]=''
+_ALL_TESTS+=(test_staging_no_bucket)
+_TEST_KIND[test_staging_no_bucket]=cli
+_TEST_DESTRUCTIVE[test_staging_no_bucket]=false
+_TEST_REQUIRES[test_staging_no_bucket]=''
+_ALL_TESTS+=(test_staging_no_volumes)
+_TEST_KIND[test_staging_no_volumes]=cli
+_TEST_DESTRUCTIVE[test_staging_no_volumes]=false
+_TEST_REQUIRES[test_staging_no_volumes]=''
+_ALL_TESTS+=(test_staging_dryrun)
+_TEST_KIND[test_staging_dryrun]=cli
+_TEST_DESTRUCTIVE[test_staging_dryrun]=false
+_TEST_REQUIRES[test_staging_dryrun]=''
+_ALL_TESTS+=(test_staging_cron_startup)
+_TEST_KIND[test_staging_cron_startup]=cron
+_TEST_DESTRUCTIVE[test_staging_cron_startup]=false
+_TEST_REQUIRES[test_staging_cron_startup]=''
+_ALL_TESTS+=(test_staging_cron_dryrun)
+_TEST_KIND[test_staging_cron_dryrun]=cron
+_TEST_DESTRUCTIVE[test_staging_cron_dryrun]=false
+_TEST_REQUIRES[test_staging_cron_dryrun]=''
+_ALL_TESTS+=(test_staging_backup_e2e)
+_TEST_KIND[test_staging_backup_e2e]=e2e
+_TEST_DESTRUCTIVE[test_staging_backup_e2e]=true
+_TEST_REQUIRES[test_staging_backup_e2e]='aws'
+_ALL_TESTS+=(test_staging_cron_backup_e2e)
+_TEST_KIND[test_staging_cron_backup_e2e]=e2e
+_TEST_DESTRUCTIVE[test_staging_cron_backup_e2e]=true
+_TEST_REQUIRES[test_staging_cron_backup_e2e]='aws'
 
 # ---------------------------------------------------------------------------
 # Test runner
