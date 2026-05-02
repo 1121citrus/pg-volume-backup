@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-05-01
+
+### Fixed
+
+- Mount `.trivyignore` into the Trivy container (`build` and
+  `test/staging`) so unfixed AL2023 CVEs are suppressed correctly;
+  without the mount the ignore file was silently skipped and the
+  gating scan failed
+- Add `.trivyignore` entries for CVE-2026-4046 (glibc) and
+  CVE-2026-3644, CVE-2026-4786, CVE-2026-6100 (python3/cpython) —
+  fix versions identified by Trivy but not yet available in the
+  AL2023 package repositories
+
 ## [1.0.4] - 2026-04-27
 
 ### Changed
