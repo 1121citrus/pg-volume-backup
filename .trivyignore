@@ -1,0 +1,17 @@
+# CVEs with fix versions identified by Trivy but not yet available in the
+# AL2023 package repositories.  Remove entries once the fixed packages land.
+
+# glibc: DoS via iconv() — fix: 2.34-231.amzn2023.0.4 (not yet in repo)
+CVE-2026-4046
+
+# cpython: incomplete control-char validation in http.cookies
+# fix: python3 3.9.25-1.amzn2023.0.5
+CVE-2026-3644
+
+# cpython: arbitrary code execution via command injection in webbrowser.open()
+# fix: python3 3.9.25-1.amzn2023.0.5
+CVE-2026-4786
+
+# cpython: arbitrary code execution/info disclosure via use-after-free in
+# decompression — fix: python3 3.9.25-1.amzn2023.0.5
+CVE-2026-6100

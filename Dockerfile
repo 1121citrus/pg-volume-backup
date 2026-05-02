@@ -43,7 +43,8 @@ COPY --from=docker-cli-source --chmod=755 /usr/local/bin/docker /usr/local/bin/d
 # cover all common backup compression scenarios.
 # hadolint ignore=DL3041
 RUN set -eux; \
-    dnf install -y --quiet \
+    dnf upgrade -y --quiet \
+    && dnf install -y --quiet \
         bzip2 \
         gnupg2 \
         gzip \

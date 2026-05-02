@@ -1,0 +1,52 @@
+# Grype ignore rules — known vulnerabilities with no actionable fix.
+# Review each entry when the AL2023 package index is updated.
+
+ignore:
+  # glibc: DoS via iconv() — fix 2.34-231.amzn2023.0.4 not yet in AL2023 repo.
+  - vulnerability: CVE-2026-4046
+    package:
+      name: glibc
+      type: rpm
+
+  - vulnerability: CVE-2026-4046
+    package:
+      name: glibc-common
+      type: rpm
+
+  - vulnerability: CVE-2026-4046
+    package:
+      name: glibc-minimal-langpack
+      type: rpm
+
+  # python3/python3-libs: cpython CVEs — fix 3.9.25-1.amzn2023.0.5 not yet
+  # in AL2023 repo.
+
+  - vulnerability: CVE-2026-3644
+    package:
+      name: python3
+      type: rpm
+
+  - vulnerability: CVE-2026-3644
+    package:
+      name: python3-libs
+      type: rpm
+
+  - vulnerability: CVE-2026-4786
+    package:
+      name: python3
+      type: rpm
+
+  - vulnerability: CVE-2026-4786
+    package:
+      name: python3-libs
+      type: rpm
+
+  - vulnerability: CVE-2026-6100
+    package:
+      name: python3
+      type: rpm
+
+  - vulnerability: CVE-2026-6100
+    package:
+      name: python3-libs
+      type: rpm
