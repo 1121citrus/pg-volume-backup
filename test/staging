@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# 1121citrus.build-date 2026-05-01T22:43:55Z
+# 1121citrus.build-date 2026-05-02T00:29:57Z
 # 1121citrus.build-version c67f81956036
 
 # test/staging — functional staging tests for pg-volume-backup.
@@ -74,7 +74,7 @@ _CACHE_RESET_TRIVY=false       # --cache reset=trivy: wipe Trivy DB volume
 _CACHE_RESET_GRYPE=false       # --cache reset=grype: wipe Grype DB volume
 _CACHE_SKIP_UPDATE_TRIVY=false  # --cache skip-update=trivy: keep existing DB
 _CACHE_SKIP_UPDATE_GRYPE=false  # --cache skip-update=grype: keep existing DB
-_TRIVY_IGNOREFILE=
+_TRIVY_IGNOREFILE=.trivyignore
 
 # ---------------------------------------------------------------------------
 # Utility functions
