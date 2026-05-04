@@ -761,10 +761,17 @@ if [[ "${SCAN}" == "true" ]]; then
     echo "==> Stage 4: Scan ${full_image}:${VERSION}" >&2
 
     _trivy_db_flags=(--skip-db-update --skip-java-db-update)
+    _trivy_ignore_vol=()
+    _trivy_ignore_flags=()
+    if [[ -f "${script_dir}/.trivyignore" ]]; then
+        _trivy_ignore_vol=(-v "${script_dir}/.trivyignore:/.trivyignore:ro")
+        _trivy_ignore_flags=(--ignorefile /.trivyignore)
+    fi
 
     run docker run --rm \
         -v "${_scan_tar}:/scan.tar:ro" \
         -v "${TRIVY_CACHE_VOLUME}:/root/.cache/trivy" \
+        "${_trivy_ignore_vol[@]}" \
         "${TRIVY_IMAGE}:${TRIVY_TAG}" image \
             --quiet \
             --no-progress \
@@ -773,6 +780,7 @@ if [[ "${SCAN}" == "true" ]]; then
             --severity HIGH,CRITICAL \
             --timeout 5m \
             "${_trivy_db_flags[@]}" \
+            "${_trivy_ignore_flags[@]}" \
             --input /scan.tar
 fi
 

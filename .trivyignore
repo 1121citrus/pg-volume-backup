@@ -1,17 +1,29 @@
-# CVEs with fix versions identified by Trivy but not yet available in the
-# AL2023 package repositories.  Remove entries once the fixed packages land.
+# Trivy ignore list for pg-volume-backup.
+#
+# CVEs listed here have fix versions in Trivy's DB but the patched packages
+# are not yet published to the Amazon Linux 2023 repository.  `dnf upgrade`
+# runs at every build and will pick up patches automatically when they land.
+# Remove each entry once `dnf check-update` confirms the fix is available.
+#
+# Verified 2026-05-04: `dnf check-update` inside the image exits 0 (no
+# updates available for glibc or python3/python3-libs).
 
-# glibc: DoS via iconv() — fix: 2.34-231.amzn2023.0.4 (not yet in repo)
+# glibc / glibc-common / glibc-minimal-langpack
+# HIGH — DoS via iconv() with specific character sets
+# Installed: 2.34-231.amzn2023.0.3; Trivy fix: 2.34-231.amzn2023.0.4
 CVE-2026-4046
 
-# cpython: incomplete control-char validation in http.cookies
-# fix: python3 3.9.25-1.amzn2023.0.5
+# python3 / python3-libs
+# HIGH — incomplete control-character validation in http.cookies
+# Installed: 3.9.25-1.amzn2023.0.4; Trivy fix: 3.9.25-1.amzn2023.0.5
 CVE-2026-3644
 
-# cpython: arbitrary code execution via command injection in webbrowser.open()
-# fix: python3 3.9.25-1.amzn2023.0.5
+# python3 / python3-libs
+# HIGH — arbitrary code execution via command injection in webbrowser.open()
+# Installed: 3.9.25-1.amzn2023.0.4; Trivy fix: 3.9.25-1.amzn2023.0.5
 CVE-2026-4786
 
-# cpython: arbitrary code execution/info disclosure via use-after-free in
-# decompression — fix: python3 3.9.25-1.amzn2023.0.5
+# python3 / python3-libs
+# HIGH — arbitrary code execution / info disclosure via use-after-free in
+# decompression; Installed: 3.9.25-1.amzn2023.0.4; Trivy fix: 3.9.25-1.amzn2023.0.5
 CVE-2026-6100
