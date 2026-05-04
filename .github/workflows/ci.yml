@@ -78,7 +78,7 @@ jobs:
         startsWith(github.ref, 'refs/tags/v') ||
         github.ref == 'refs/heads/staging'
       )
-    uses: 1121citrus/shared-github-workflows/.github/workflows/push.yml@b06a3294d76bce96f5cd1cfc8974a4d673d6dc29
+    uses: 1121citrus/shared-github-workflows/.github/workflows/push.yml@65524d3e65ab18a78651ed82c3a101be5432c5c1
     with:
       image: 1121citrus/pg-volume-backup
     secrets: inherit
