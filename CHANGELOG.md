@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-05-04
+
+### Fixed
+
+- Auto-detect `.trivyignore` in staging Trivy scan: `_TRIVY_IGNOREFILE` defaulted
+  to empty; now defaults to `.trivyignore`, matching `build` auto-detection
+- Suppress unfixable AL2023 CVEs in `build` scan: conditionally mount `.trivyignore`
+  and pass `--ignorefile` when present; add entries for CVE-2026-4046 (glibc) and
+  CVE-2026-3644, CVE-2026-4786, CVE-2026-6100 (python3/cpython)
+
+### Added
+
+- Add `gitleaks` CI workflow for secret scanning
+- Regenerate `build` and `test/staging` scripts with gitleaks advisement support
+  and dive output filter
+
 ## [1.0.5] - 2026-05-01
 
 ### Fixed
@@ -83,7 +99,9 @@ See git log for details.
 - Documentation: README, SECURITY, CONTRIBUTING, src/bin/README,
   test/README, test/TESTING
 
-[Unreleased]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.6...HEAD
+[1.0.6]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.5...v1.0.6
+[1.0.5]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.1...v1.0.2
