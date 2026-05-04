@@ -74,7 +74,7 @@ _CACHE_RESET_TRIVY=false       # --cache reset=trivy: wipe Trivy DB volume
 _CACHE_RESET_GRYPE=false       # --cache reset=grype: wipe Grype DB volume
 _CACHE_SKIP_UPDATE_TRIVY=false  # --cache skip-update=trivy: keep existing DB
 _CACHE_SKIP_UPDATE_GRYPE=false  # --cache skip-update=grype: keep existing DB
-_TRIVY_IGNOREFILE=
+_TRIVY_IGNOREFILE=.trivyignore  # auto-detected; overridable via --trivy-ignorefile
 
 # ---------------------------------------------------------------------------
 # Utility functions
