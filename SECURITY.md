@@ -57,3 +57,36 @@ Docker daemon.  Mitigations:
 
 Report vulnerabilities through the
 [GitHub Security tab](https://github.com/1121citrus/pg-volume-backup/security).
+
+## Scanner status and CVE triage
+
+As of 2026-06-08, Trivy gating runs clean with no HIGH/CRITICAL findings and
+`.trivyignore` is intentionally empty.
+
+### Scout HIGH findings handled
+
+- Rebuilt `pg-volume-backup:latest` from the locally rebuilt
+  `aws-backup-base:latest` so `supercronic` is compiled with Go 1.26.4,
+  removing the Go stdlib HIGH finding (`CVE-2026-42504`)
+- Updated AL2023 package set in the final image so previously ignored HIGH
+  RPM findings are now fixed in-image:
+  - `glibc-2.34-231.amzn2023.0.4`
+  - `python3-libs-3.9.25-1.amzn2023.0.5`
+  - `gnutls-3.8.3-8.amzn2023.0.3`
+  - `libcap-2.73-1.amzn2023.0.7`
+
+### Scout HIGH findings not currently remediable in AL2023
+
+Remaining Scout HIGHs are tied to AL2023-published package versions for
+`python3-urllib3`, `python3-setuptools`, and perl subpackages.
+
+Current verification:
+
+- `dnf list --showduplicates python3-urllib3 python3-setuptools perl-interpreter`
+  shows the installed versions are already the newest available in the
+  configured AL2023 repositories
+- Removing `python3-urllib3` also removes `awscli-2`, which is required by the
+  backup workflow
+
+These findings are tracked as upstream repository constraints and should be
+reassessed when newer AL2023 RPMs are published.

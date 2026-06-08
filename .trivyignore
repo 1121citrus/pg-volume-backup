@@ -1,29 +1,10 @@
 # Trivy ignore list for pg-volume-backup.
 #
-# CVEs listed here have fix versions in Trivy's DB but the patched packages
-# are not yet published to the Amazon Linux 2023 repository.  `dnf upgrade`
-# runs at every build and will pick up patches automatically when they land.
-# Remove each entry once `dnf check-update` confirms the fix is available.
+# Intentionally empty as of 2026-06-08.
 #
-# Verified 2026-05-04: `dnf check-update` inside the image exits 0 (no
-# updates available for glibc or python3/python3-libs).
+# The image now ships with fixed AL2023 RPMs for previously ignored items:
+#   glibc-2.34-231.amzn2023.0.4
+#   python3-libs-3.9.25-1.amzn2023.0.5
+#   gnutls-3.8.3-8.amzn2023.0.3
+#   libcap-2.73-1.amzn2023.0.7
 
-# glibc / glibc-common / glibc-minimal-langpack
-# HIGH — DoS via iconv() with specific character sets
-# Installed: 2.34-231.amzn2023.0.3; Trivy fix: 2.34-231.amzn2023.0.4
-CVE-2026-4046
-
-# python3 / python3-libs
-# HIGH — incomplete control-character validation in http.cookies
-# Installed: 3.9.25-1.amzn2023.0.4; Trivy fix: 3.9.25-1.amzn2023.0.5
-CVE-2026-3644
-
-# python3 / python3-libs
-# HIGH — arbitrary code execution via command injection in webbrowser.open()
-# Installed: 3.9.25-1.amzn2023.0.4; Trivy fix: 3.9.25-1.amzn2023.0.5
-CVE-2026-4786
-
-# python3 / python3-libs
-# HIGH — arbitrary code execution / info disclosure via use-after-free in
-# decompression; Installed: 3.9.25-1.amzn2023.0.4; Trivy fix: 3.9.25-1.amzn2023.0.5
-CVE-2026-6100
