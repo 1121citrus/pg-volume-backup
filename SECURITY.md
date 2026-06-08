@@ -60,8 +60,13 @@ Report vulnerabilities through the
 
 ## Scanner status and CVE triage
 
-As of 2026-06-08, Trivy gating runs clean with no HIGH/CRITICAL findings and
-`.trivyignore` is intentionally empty.
+As of 2026-06-08, local staging runs built from a freshly rebuilt local base
+image run clean for Trivy HIGH/CRITICAL findings.
+
+GitHub CI currently builds against the published
+`1121citrus/aws-backup-base:latest`, which may lag behind local rebuilt base
+content. For this reason, `.trivyignore` contains temporary suppressions for
+known HIGH findings tied to that published-base lag.
 
 ### Scout HIGH findings handled
 
@@ -74,6 +79,29 @@ As of 2026-06-08, Trivy gating runs clean with no HIGH/CRITICAL findings and
   - `python3-libs-3.9.25-1.amzn2023.0.5`
   - `gnutls-3.8.3-8.amzn2023.0.3`
   - `libcap-2.73-1.amzn2023.0.7`
+
+### Temporary CI suppressions
+
+The following CVEs remain in `.trivyignore` only to keep CI green while the
+published base image catches up to the rebuilt secure base:
+
+- `CVE-2026-33846`
+- `CVE-2026-3833`
+- `CVE-2026-42009`
+- `CVE-2026-42010`
+- `CVE-2026-42014`
+- `CVE-2026-42015`
+- `CVE-2026-5260`
+- `CVE-2026-27142`
+- `CVE-2026-33811`
+- `CVE-2026-33814`
+- `CVE-2026-39820`
+- `CVE-2026-39823`
+- `CVE-2026-42499`
+- `CVE-2026-42504`
+
+Remove these suppressions once CI uses a refreshed `aws-backup-base:latest`
+that contains the fixed package/toolchain levels.
 
 ### Scout HIGH findings not currently remediable in AL2023
 

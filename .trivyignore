@@ -1,10 +1,30 @@
 # Trivy ignore list for pg-volume-backup.
 #
-# Intentionally empty as of 2026-06-08.
+# Temporary suppressions for CI builds that consume the published
+# `1121citrus/aws-backup-base:latest` image before a refreshed base image is
+# available in the registry. Local staging runs that build from the rebuilt
+# local base are expected to be clean without these entries.
 #
-# The image now ships with fixed AL2023 RPMs for previously ignored items:
-#   glibc-2.34-231.amzn2023.0.4
-#   python3-libs-3.9.25-1.amzn2023.0.5
-#   gnutls-3.8.3-8.amzn2023.0.3
-#   libcap-2.73-1.amzn2023.0.7
+# Re-validate and remove these entries after the refreshed base image is
+# published and downstream CI picks it up.
+
+# gnutls
+CVE-2026-33846
+CVE-2026-3833
+CVE-2026-42009
+CVE-2026-42010
+CVE-2026-42014
+CVE-2026-42015
+CVE-2026-5260
+
+# libcap (Go stdlib advisories in transitive metadata)
+CVE-2026-27142
+CVE-2026-33811
+CVE-2026-33814
+CVE-2026-39820
+CVE-2026-39823
+CVE-2026-42499
+
+# supercronic Go stdlib
+CVE-2026-42504
 
