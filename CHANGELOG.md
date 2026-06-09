@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-06-09
+
+### Fixed
+
+- Restore targeted Trivy suppressions for GitHub CI builds that still consume a
+  published `aws-backup-base:latest` image lagging behind the rebuilt local base
+- Document scanner and CVE triage status, including the distinction between
+  local rebuilt-base validation and published-base CI behavior
+
+### Added
+
+- Add metrics, security, and churn advisory stages to the `build` pipeline
+
+### Changed
+
+- Bump `actions/checkout` from `6.0.2` to `6.0.3`
+- Bump `shared-github-workflows` pin to `65524d3e65ab`
+
 ## [1.0.6] - 2026-05-04
 
 ### Fixed
@@ -99,7 +117,8 @@ See git log for details.
 - Documentation: README, SECURITY, CONTRIBUTING, src/bin/README,
   test/README, test/TESTING
 
-[Unreleased]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.6...HEAD
+[Unreleased]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.7...HEAD
+[1.0.7]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.3...v1.0.4
