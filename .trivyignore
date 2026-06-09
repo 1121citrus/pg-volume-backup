@@ -9,6 +9,7 @@
 # published and downstream CI picks it up.
 
 # gnutls
+CVE-2026-33845
 CVE-2026-33846
 CVE-2026-3833
 CVE-2026-42009
@@ -27,4 +28,20 @@ CVE-2026-42499
 
 # supercronic Go stdlib
 CVE-2026-42504
+
+# libsolv
+CVE-2026-48863
+CVE-2026-48864
+CVE-2026-9149
+CVE-2026-9150
+
+# postgresql15 / postgresql15-private-libs
+CVE-2026-6472
+CVE-2026-6473
+CVE-2026-6474
+CVE-2026-6475
+CVE-2026-6477
+CVE-2026-6478
+CVE-2026-6479
+CVE-2026-6637
 

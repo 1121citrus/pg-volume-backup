@@ -60,13 +60,12 @@ Report vulnerabilities through the
 
 ## Scanner status and CVE triage
 
-As of 2026-06-08, local staging runs built from a freshly rebuilt local base
-image run clean for Trivy HIGH/CRITICAL findings.
+As of 2026-06-09, `.trivyignore` contains temporary suppressions required for
+both local staging and GitHub CI Trivy gates.
 
-GitHub CI currently builds against the published
-`1121citrus/aws-backup-base:latest`, which may lag behind local rebuilt base
-content. For this reason, `.trivyignore` contains temporary suppressions for
-known HIGH findings tied to that published-base lag.
+Current staging verification shows additional HIGH findings in AL2023 package
+streams whose Trivy fix versions are not yet available from the configured
+repositories used by the image build.
 
 ### Scout HIGH findings handled
 
@@ -82,9 +81,11 @@ known HIGH findings tied to that published-base lag.
 
 ### Temporary CI suppressions
 
-The following CVEs remain in `.trivyignore` only to keep CI green while the
-published base image catches up to the rebuilt secure base:
+The following CVEs remain in `.trivyignore` to keep staging and CI green while
+AL2023 package publication catches up to Trivy's fixed-version metadata and the
+published base image catches up to rebuilt local content:
 
+- `CVE-2026-33845`
 - `CVE-2026-33846`
 - `CVE-2026-3833`
 - `CVE-2026-42009`
@@ -92,6 +93,10 @@ published base image catches up to the rebuilt secure base:
 - `CVE-2026-42014`
 - `CVE-2026-42015`
 - `CVE-2026-5260`
+- `CVE-2026-48863`
+- `CVE-2026-48864`
+- `CVE-2026-9149`
+- `CVE-2026-9150`
 - `CVE-2026-27142`
 - `CVE-2026-33811`
 - `CVE-2026-33814`
@@ -99,20 +104,33 @@ published base image catches up to the rebuilt secure base:
 - `CVE-2026-39823`
 - `CVE-2026-42499`
 - `CVE-2026-42504`
+- `CVE-2026-6472`
+- `CVE-2026-6473`
+- `CVE-2026-6474`
+- `CVE-2026-6475`
+- `CVE-2026-6477`
+- `CVE-2026-6478`
+- `CVE-2026-6479`
+- `CVE-2026-6637`
 
-Remove these suppressions once CI uses a refreshed `aws-backup-base:latest`
-that contains the fixed package/toolchain levels.
+Remove these suppressions once AL2023 publishes the corresponding fixed RPMs
+and CI consumes a refreshed `aws-backup-base:latest` with the fixed package and
+toolchain levels.
 
 ### Scout HIGH findings not currently remediable in AL2023
 
-Remaining Scout HIGHs are tied to AL2023-published package versions for
-`python3-urllib3`, `python3-setuptools`, and perl subpackages.
+Remaining Scout and Trivy HIGHs are tied to AL2023-published package versions
+for `python3-urllib3`, `python3-setuptools`, perl subpackages, `libsolv`,
+`gnutls`, and `postgresql15` packages.
 
 Current verification:
 
 - `dnf list --showduplicates python3-urllib3 python3-setuptools perl-interpreter`
   shows the installed versions are already the newest available in the
   configured AL2023 repositories
+- `dnf list --showduplicates gnutls libsolv postgresql15 postgresql15-private-libs`
+  shows the installed versions are already the newest available in the
+  configured AL2023 repositories for the image build
 - Removing `python3-urllib3` also removes `awscli-2`, which is required by the
   backup workflow
 
