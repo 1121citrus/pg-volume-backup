@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-06-09
+
+### Fixed
+
+- Suppress newly surfaced unfixable AL2023 HIGH CVEs in `.trivyignore` for
+  local staging and CI Trivy gates
+- Update security triage documentation to reflect current AL2023 package
+  availability constraints and temporary suppression policy
+
+### Changed
+
+- Refine `build` advisory tooling: pin `scc` image tag to `v3.7.0`, call `scc`
+  explicitly, simplify `test/run-all` env invocation, and replace the
+  code-maat churn stage with a git+awk churn summary
+
 ## [1.0.7] - 2026-06-09
 
 ### Fixed
@@ -117,7 +132,8 @@ See git log for details.
 - Documentation: README, SECURITY, CONTRIBUTING, src/bin/README,
   test/README, test/TESTING
 
-[Unreleased]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.7...HEAD
+[Unreleased]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.8...HEAD
+[1.0.8]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.4...v1.0.5
