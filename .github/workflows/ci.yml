@@ -22,12 +22,12 @@ env:
 jobs:
   # ── Stage 1: Lint ──────────────────────────────────────────────────────────
   lint:
-    uses: 1121citrus/shared-github-workflows/.github/workflows/lint.yml@65524d3e65ab18a78651ed82c3a101be5432c5c1
+    uses: 1121citrus/shared-github-workflows/.github/workflows/lint.yml@v1
 
   # ── Stage 2: Build ─────────────────────────────────────────────────────────
   build:
     needs: lint
-    uses: 1121citrus/shared-github-workflows/.github/workflows/build.yml@65524d3e65ab18a78651ed82c3a101be5432c5c1
+    uses: 1121citrus/shared-github-workflows/.github/workflows/build.yml@v1
     with:
       image: 1121citrus/pg-volume-backup
 
@@ -66,7 +66,7 @@ jobs:
   # ── Stage 4: Security scan ─────────────────────────────────────────────────
   scan:
     needs: build
-    uses: 1121citrus/shared-github-workflows/.github/workflows/scan.yml@65524d3e65ab18a78651ed82c3a101be5432c5c1
+    uses: 1121citrus/shared-github-workflows/.github/workflows/scan.yml@v1
     with:
       image: 1121citrus/pg-volume-backup
 
@@ -74,11 +74,9 @@ jobs:
   push:
     needs: [test, scan]
     if: >
-      github.event_name == 'push' && (
-        startsWith(github.ref, 'refs/tags/v') ||
-        github.ref == 'refs/heads/staging'
-      )
-    uses: 1121citrus/shared-github-workflows/.github/workflows/push.yml@65524d3e65ab18a78651ed82c3a101be5432c5c1
+      github.event_name == 'push' &&
+      startsWith(github.ref, 'refs/tags/v')
+    uses: 1121citrus/shared-github-workflows/.github/workflows/push.yml@v1
     with:
       image: 1121citrus/pg-volume-backup
     secrets: inherit
