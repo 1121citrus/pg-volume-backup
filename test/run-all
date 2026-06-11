@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# 1121citrus.build-date 2026-05-04T00:23:20Z
-# 1121citrus.build-version bb2b9a0df3a1
+# Generator: build-generate
 
 # test/run-all wrapper script
 
