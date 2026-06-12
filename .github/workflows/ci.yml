@@ -27,7 +27,7 @@ jobs:
   # ── Stage 2: Build ─────────────────────────────────────────────────────────
   build:
     needs: lint
-    uses: 1121citrus/shared-github-workflows/.github/workflows/build.yml@65524d3e65ab18a78651ed82c3a101be5432c5c1
+    uses: 1121citrus/shared-github-workflows/.github/workflows/build.yml@e629d77881a08196f94e3d433c4fd15267e224de
     with:
       image: 1121citrus/pg-volume-backup
 
