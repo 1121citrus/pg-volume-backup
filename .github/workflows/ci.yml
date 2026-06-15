@@ -66,7 +66,7 @@ jobs:
   # ── Stage 4: Security scan ─────────────────────────────────────────────────
   scan:
     needs: build
-    uses: 1121citrus/shared-github-workflows/.github/workflows/scan.yml@65524d3e65ab18a78651ed82c3a101be5432c5c1
+    uses: 1121citrus/shared-github-workflows/.github/workflows/scan.yml@57573206f991ffc437aefc8d7ea4bfaa443cdb6e
     with:
       image: 1121citrus/pg-volume-backup
 
