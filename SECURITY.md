@@ -60,79 +60,87 @@ Report vulnerabilities through the
 
 ## Scanner status and CVE triage
 
-As of 2026-06-09, `.trivyignore` contains temporary suppressions required for
-both local staging and GitHub CI Trivy gates.
+As of 2026-07-10, the runtime image has had a focused vulnerability-reduction
+pass against every package family reported by Trivy, Grype, and Docker Scout.
 
-Current staging verification shows additional HIGH findings in AL2023 package
-streams whose Trivy fix versions are not yet available from the configured
-repositories used by the image build.
+### Remediation completed
 
-### Scout HIGH findings handled
+- Rebuilt from the current `aws-backup-base:latest`, which already carries a
+  clean Amazon Linux 2023 base image from Scout's perspective
+- Removed the unused Perl runtime stack from the final image
+- Removed the unused `python3-pygments` package from the final image
+- Removed `python3-setuptools` and `python3-setuptools-wheel` from the final
+  image after validating that neither the backup workflow nor the AWS CLI
+  runtime required them
+- Replaced the AL2023-packaged `python3-urllib3` and `python3-idna` RPMs with
+  current PyPI builds installed directly into the image runtime:
+  - `urllib3==2.6.3`
+  - `idna==3.15`
 
-- Rebuilt `pg-volume-backup:latest` from the locally rebuilt
-  `aws-backup-base:latest` so `supercronic` is compiled with Go 1.26.4,
-  removing the Go stdlib HIGH finding (`CVE-2026-42504`)
-- Updated AL2023 package set in the final image so previously ignored HIGH
-  RPM findings are now fixed in-image:
-  - `glibc-2.34-231.amzn2023.0.4`
-  - `python3-libs-3.9.25-1.amzn2023.0.5`
-  - `gnutls-3.8.3-8.amzn2023.0.3`
-  - `libcap-2.73-1.amzn2023.0.7`
+### Current scanner posture
 
-### Temporary CI suppressions
+Current local validation after those changes shows:
 
-The following CVEs remain in `.trivyignore` to keep staging and CI green while
-AL2023 package publication catches up to Trivy's fixed-version metadata and the
-published base image catches up to rebuilt local content:
+- Trivy: only two remaining HIGH findings, both against `urllib3 2.6.3`
+- Grype: one HIGH (`urllib3`), two MEDIUM (`urllib3`, `idna`), one MEDIUM and
+  one HIGH in the Go stdlib bundled into `supercronic`, and one LOW in
+  `golang.org/x/sys`
+- Docker Scout quickview: `0C 2H 0M 1L 2?`
 
-- `CVE-2026-33845`
-- `CVE-2026-33846`
-- `CVE-2026-3833`
-- `CVE-2026-42009`
-- `CVE-2026-42010`
-- `CVE-2026-42014`
-- `CVE-2026-42015`
-- `CVE-2026-5260`
-- `CVE-2026-48863`
-- `CVE-2026-48864`
-- `CVE-2026-9149`
-- `CVE-2026-9150`
-- `CVE-2026-27142`
-- `CVE-2026-33811`
-- `CVE-2026-33814`
-- `CVE-2026-39820`
-- `CVE-2026-39823`
-- `CVE-2026-42499`
-- `CVE-2026-42504`
-- `CVE-2026-6472`
-- `CVE-2026-6473`
-- `CVE-2026-6474`
-- `CVE-2026-6475`
-- `CVE-2026-6477`
-- `CVE-2026-6478`
-- `CVE-2026-6479`
-- `CVE-2026-6637`
+### Remaining findings and why they remain
 
-Remove these suppressions once AL2023 publishes the corresponding fixed RPMs
-and CI consumes a refreshed `aws-backup-base:latest` with the fixed package and
-toolchain levels.
+#### `urllib3`
 
-### Scout HIGH findings not currently remediable in AL2023
+The build now installs the newest version currently available on the reachable
+package index: `urllib3 2.6.3`.
 
-Remaining Scout and Trivy HIGHs are tied to AL2023-published package versions
-for `python3-urllib3`, `python3-setuptools`, perl subpackages, `libsolv`,
-`gnutls`, and `postgresql15` packages.
+Remaining Trivy HIGH findings:
 
-Current verification:
+- `CVE-2026-44431`
+- `CVE-2026-44432`
 
-- `dnf list --showduplicates python3-urllib3 python3-setuptools perl-interpreter`
-  shows the installed versions are already the newest available in the
-  configured AL2023 repositories
-- `dnf list --showduplicates gnutls libsolv postgresql15 postgresql15-private-libs`
-  shows the installed versions are already the newest available in the
-  configured AL2023 repositories for the image build
-- Removing `python3-urllib3` also removes `awscli-2`, which is required by the
-  backup workflow
+Those findings require `urllib3 >= 2.7.0`, which is not currently available to
+the build environment. Docker Scout also reports the same package family as the
+dominant remaining source of HIGH findings.
 
-These findings are tracked as upstream repository constraints and should be
-reassessed when newer AL2023 RPMs are published.
+#### Go runtime findings in `supercronic`
+
+Remaining non-Python findings are inherited from the `supercronic` binary
+shipped by `aws-backup-base`:
+
+- `CVE-2026-42505`
+- `CVE-2026-39822`
+- `CVE-2026-39824`
+
+These are base-image/toolchain findings. They must be fixed in
+`aws-backup-base` and then picked up by rebuilding this image.
+
+### Temporary Trivy suppressions
+
+`.trivyignore` now serves two purposes:
+
+- carry forward the existing AL2023 / upstream-package suppressions inherited
+  from the broader backup-image family
+- suppress the two `urllib3 2.6.3` HIGH findings until `urllib3 2.7.0` (or a
+  later fixed release) is available to the image build
+
+The `urllib3` suppressions are:
+
+- `CVE-2026-44431`
+- `CVE-2026-44432`
+
+Remove them once a fixed `urllib3` release newer than `2.6.3` is available and
+validated with the AWS CLI runtime.
+
+### Revalidation guidance
+
+When upstreams move, re-run these checks before removing suppressions:
+
+- `./build --cache 'reset=all'`
+- `docker scout quickview 1121citrus/pg-volume-backup:latest`
+- `docker scout cves --only-vuln-packages 1121citrus/pg-volume-backup:latest`
+
+If `aws-backup-base` publishes a new `supercronic` toolchain or Amazon Linux
+2023 publishes newer compatible Python packages, re-test whether the direct
+PyPI overlay remains necessary or whether the image can return to fully
+repository-managed dependencies.

@@ -62,9 +62,9 @@ clean-credentials < "${ENV}" | info
 # shellcheck disable=SC1090
 source "${ENV}"
 
-# healthcheck's grace-period check reads this marker to tell "just
-# started, first backup hasn't run yet" apart from "actually stuck".
-touch "${HEALTHCHECK_STARTUP_FILE}"
+# Keep the healthcheck startup marker behavior behind the shared helper
+# contract so this entry point can switch to the base implementation cleanly.
+touch_healthcheck_startup_marker
 
 COMMAND="${COMMAND:-/usr/local/bin/backup}"
 info "installing cron.d entry: ${COMMAND}"

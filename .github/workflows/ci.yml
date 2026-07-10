@@ -23,4 +23,5 @@ jobs:
       test-mode: run-all-image
       test-run-all-cmd: ./test/run-all
       test-extra-packages: gnupg
+      trivyignore: .trivyignore
     secrets: inherit

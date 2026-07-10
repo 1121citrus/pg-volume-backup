@@ -5,7 +5,18 @@
 
 set -euo pipefail
 
-whereami=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+# Portable absolute-path resolver (macOS BSD readlink lacks -f).
+_portable_readlink() {
+    if command -v realpath >/dev/null 2>&1; then
+        realpath "$1"
+    elif readlink -f "$1" >/dev/null 2>&1; then
+        readlink -f "$1"
+    else
+        (cd "$(dirname "$1")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$1")")
+    fi
+}
+
+whereami=$(dirname "$(_portable_readlink "${BASH_SOURCE[0]}")")
 started_at=$(date +%s)
 summary_file="${TEST_SUMMARY_JSON:-}"
 
@@ -41,7 +52,7 @@ if (
         --workdir "${PWD}" \
         --entrypoint sh \
         "bats/bats:1.13.0" \
-        -c "apk add --quiet --no-cache docker-cli gnupg >/dev/null 2>&1 && bats test"
+        -c "apk add --quiet --no-cache docker-cli gnupg >/dev/null 2>&1 && bats --recursive test"
 ); then
     finished_at=$(date +%s)
     write_test_summary "passed" 0 "$((finished_at - started_at))"

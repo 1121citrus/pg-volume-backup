@@ -45,3 +45,9 @@ CVE-2026-6478
 CVE-2026-6479
 CVE-2026-6637
 
+# urllib3 2.6.3 is the newest version currently available on the package index
+# reachable from the build environment; Trivy's remaining findings require the
+# not-yet-published 2.7.0 line.
+CVE-2026-44431
+CVE-2026-44432
+

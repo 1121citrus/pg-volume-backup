@@ -58,3 +58,8 @@ function warn() {
 function is_true() {
     echo "${1:?Need argument}" | grep -Eiq '^\s*(1|true|t|yes|y)\s*$'
 }
+
+function touch_healthcheck_startup_marker() {
+    [[ -n "${HEALTHCHECK_STARTUP_FILE:-}" ]] && touch "${HEALTHCHECK_STARTUP_FILE}"
+    return 0
+}

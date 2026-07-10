@@ -51,8 +51,17 @@ RUN set -eux; \
         lzop \
         pigz \
         postgresql15 \
+        python3-pip \
         xz \
         zip \
+    && dnf remove -y 'perl*' python3-pygments \
+    && rpm -e --nodeps python3-setuptools python3-setuptools-wheel \
+    && rpm -e --nodeps python3-idna python3-urllib3 \
+    && python3 -m pip install --no-cache-dir --upgrade \
+        --target /usr/lib64/python3.9/site-packages \
+        idna==3.15 \
+        urllib3==2.6.3 \
+    && dnf remove -y python3-pip \
     && useradd \
         --create-home --shell /sbin/nologin \
         --uid "${UID}" pg-volume-backup \
@@ -63,7 +72,7 @@ RUN set -eux; \
     && install -d -m 755 /var/spool/cron \
     && install -d -m 0755 -o pg-volume-backup /var/spool/cron/crontabs \
     && mkdir -pv /usr/local/include/bash \
-    && ln -sf /usr/local/bin/common-functions \
+    && ln -sf /usr/local/include/common-functions \
         /usr/local/include/bash/common-functions \
     && mkdir -p /usr/local/share/pg-volume-backup \
     && printf '%s\n' "${VERSION}" \
@@ -72,7 +81,6 @@ RUN set -eux; \
     && rm -rf /var/cache/dnf
 
 COPY --chmod=755 ./src/bin/* /usr/local/bin/
-COPY --chmod=755 ./src/common-functions /usr/local/bin/
 
 USER pg-volume-backup
 

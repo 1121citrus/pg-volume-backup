@@ -159,6 +159,22 @@ teardown() {
     ! is_true 0
 }
 
+@test "common-functions: touch_healthcheck_startup_marker creates the marker" {
+    # shellcheck disable=SC1091
+    source /usr/local/include/bash/common-functions
+    local marker="${TEST_TMPDIR}/startup-marker"
+    HEALTHCHECK_STARTUP_FILE="${marker}" touch_healthcheck_startup_marker
+    [ -f "${marker}" ]
+}
+
+@test "common-functions: touch_healthcheck_startup_marker is a no-op when unset" {
+    # shellcheck disable=SC1091
+    source /usr/local/include/bash/common-functions
+    unset HEALTHCHECK_STARTUP_FILE
+    run touch_healthcheck_startup_marker
+    [ "$status" -eq 0 ]
+}
+
 # ── pg-volume-backup ──────────────────────────────────────────────────────────
 
 @test "pg-volume-backup: --help exits 0" {
