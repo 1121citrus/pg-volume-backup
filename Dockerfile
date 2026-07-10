@@ -8,9 +8,19 @@
 ARG BASE_IMAGE=1121citrus/aws-backup-base:latest
 
 # ── Docker CLI build stage ─────────────────────────────────────────────────
-# Extracts the statically-linked docker CLI binary from Docker's official
-# image so no third-party repository is required in the final image.
-FROM docker:cli AS docker-cli-source
+# Build the Docker CLI from source in GOPATH mode so the final image does not
+# inherit the prebuilt binary's stale Go stdlib scan data.
+FROM golang:1.26.5-alpine AS docker-cli-builder
+
+WORKDIR /tmp/gopath/src/github.com/docker/cli
+
+# hadolint ignore=DL3018
+RUN apk add --no-cache git \
+    && git clone --branch v29.6.1 --depth 1 \
+        https://github.com/docker/cli.git \
+        . \
+    && GOPATH=/tmp/gopath GO111MODULE=off CGO_ENABLED=0 \
+        /usr/local/go/bin/go build -o /go/bin/docker ./cmd/docker
 
 # ── Final image ────────────────────────────────────────────────────────────
 # hadolint ignore=DL3006
@@ -35,9 +45,6 @@ LABEL org.opencontainers.image.title="pg-volume-backup" \
       org.opencontainers.image.revision="${GIT_COMMIT}" \
       org.opencontainers.image.created="${BUILD_DATE}"
 
-# Copy the statically-linked docker CLI binary from the official docker:cli image.
-COPY --from=docker-cli-source --chmod=755 /usr/local/bin/docker /usr/local/bin/docker
-
 # Install required utilities and configure environment.
 # bzip3 and pixz are not available in AL2023; gzip, bzip2, xz, lzop, and pigz
 # cover all common backup compression scenarios.
@@ -51,17 +58,10 @@ RUN set -eux; \
         lzop \
         pigz \
         postgresql15 \
-        python3-pip \
         xz \
         zip \
     && dnf remove -y 'perl*' python3-pygments \
     && rpm -e --nodeps python3-setuptools python3-setuptools-wheel \
-    && rpm -e --nodeps python3-idna python3-urllib3 \
-    && python3 -m pip install --no-cache-dir --upgrade \
-        --target /usr/lib64/python3.9/site-packages \
-        idna==3.15 \
-        urllib3==2.6.3 \
-    && dnf remove -y python3-pip \
     && useradd \
         --create-home --shell /sbin/nologin \
         --uid "${UID}" pg-volume-backup \
@@ -79,6 +79,8 @@ RUN set -eux; \
         > /usr/local/share/pg-volume-backup/version \
     && dnf clean all \
     && rm -rf /var/cache/dnf
+
+COPY --from=docker-cli-builder --chmod=755 /go/bin/docker /usr/local/bin/docker
 
 COPY --chmod=755 ./src/bin/* /usr/local/bin/
 

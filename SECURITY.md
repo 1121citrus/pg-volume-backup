@@ -65,82 +65,44 @@ pass against every package family reported by Trivy, Grype, and Docker Scout.
 
 ### Remediation completed
 
-- Rebuilt from the current `aws-backup-base:latest`, which already carries a
-  clean Amazon Linux 2023 base image from Scout's perspective
+- Rebuilt from the current `aws-backup-base:latest` and removed child-specific
+  Python overlay customizations so scanner output is easier to attribute
 - Removed the unused Perl runtime stack from the final image
 - Removed the unused `python3-pygments` package from the final image
 - Removed `python3-setuptools` and `python3-setuptools-wheel` from the final
   image after validating that neither the backup workflow nor the AWS CLI
   runtime required them
-- Replaced the AL2023-packaged `python3-urllib3` and `python3-idna` RPMs with
-  current PyPI builds installed directly into the image runtime:
-  - `urllib3==2.6.3`
-  - `idna==3.15`
+- Relied on the shared `awscli-2` package from `aws-backup-base` for the AWS
+  CLI runtime instead of carrying a separate Python overlay in this image
 
 ### Current scanner posture
 
 Current local validation after those changes shows:
 
-- Trivy: only two remaining HIGH findings, both against `urllib3 2.6.3`
-- Grype: one HIGH (`urllib3`), two MEDIUM (`urllib3`, `idna`), one MEDIUM and
-  one HIGH in the Go stdlib bundled into `supercronic`, and one LOW in
-  `golang.org/x/sys`
-- Docker Scout quickview: `0C 2H 0M 1L 2?`
+- Trivy: child-specific Python overlay findings were removed; remaining gating
+  results depend on the shared base digest and current ignore policy
+- Grype: child-specific Python overlay findings were removed; remaining
+  advisory results are inherited from shared base content and feed state
+- Docker Scout: residual findings are inherited from the shared base image
+  rather than a child-specific Python package pin
 
 ### Remaining findings and why they remain
 
-#### `urllib3`
+#### Inherited scanner findings
 
-The build now installs the newest version currently available on the reachable
-package index: `urllib3 2.6.3`.
-
-Remaining Trivy HIGH findings:
-
-- `CVE-2026-44431`
-- `CVE-2026-44432`
-
-Those findings require `urllib3 >= 2.7.0`, which is not currently available to
-the build environment. Docker Scout also reports the same package family as the
-dominant remaining source of HIGH findings.
-
-#### Go runtime findings in `supercronic`
-
-Remaining non-Python findings are inherited from the `supercronic` binary
-shipped by `aws-backup-base`:
-
-- `CVE-2026-42505`
-- `CVE-2026-39822`
-- `CVE-2026-39824`
-
-These are base-image/toolchain findings. They must be fixed in
-`aws-backup-base` and then picked up by rebuilding this image.
-
-### Temporary Trivy suppressions
-
-`.trivyignore` now serves two purposes:
-
-- carry forward the existing AL2023 / upstream-package suppressions inherited
-  from the broader backup-image family
-- suppress the two `urllib3 2.6.3` HIGH findings until `urllib3 2.7.0` (or a
-  later fixed release) is available to the image build
-
-The `urllib3` suppressions are:
-
-- `CVE-2026-44431`
-- `CVE-2026-44432`
-
-Remove them once a fixed `urllib3` release newer than `2.6.3` is available and
-validated with the AWS CLI runtime.
+Any remaining scanner findings in this image are inherited from the shared base
+image, most notably the AWS CLI package shipped there. The child image no
+longer adds a separate `urllib3`/`idna` overlay of its own.
 
 ### Revalidation guidance
 
-When upstreams move, re-run these checks before removing suppressions:
+When upstreams move, re-run these checks before changing the shared base image
+or introducing new runtime dependencies:
 
 - `./build --cache 'reset=all'`
 - `docker scout quickview 1121citrus/pg-volume-backup:latest`
 - `docker scout cves --only-vuln-packages 1121citrus/pg-volume-backup:latest`
 
-If `aws-backup-base` publishes a new `supercronic` toolchain or Amazon Linux
-2023 publishes newer compatible Python packages, re-test whether the direct
-PyPI overlay remains necessary or whether the image can return to fully
-repository-managed dependencies.
+If `aws-backup-base` publishes a new `supercronic` toolchain or a different AWS
+CLI packaging approach becomes available, re-test whether the child image can
+remain free of inherited Python package findings.

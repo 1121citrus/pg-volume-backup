@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-07-10
+
+### Fixed
+
+- Remove temporary `urllib3` Trivy suppressions that were tied to the retired
+  child-image Python overlay
+- Update `SECURITY.md` scanner posture notes to match the current base-inherited
+  finding model and release-readiness checks
+
+### Changed
+
+- Build the Docker CLI from source (`docker/cli` v29.6.1 with Go 1.26.5) in a
+  dedicated builder stage instead of copying it from the prebuilt `docker:cli`
+  image
+- Drop child-image Python package overlay logic (`python3-pip`, `idna`,
+  `urllib3`) and rely on the shared `awscli-2` runtime from `aws-backup-base`
+
 ## [1.0.8] - 2026-06-09
 
 ### Fixed
