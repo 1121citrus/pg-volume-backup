@@ -335,6 +335,13 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
+@test "startup: touches HEALTHCHECK_STARTUP_FILE before installing the crontab" {
+    local marker="${TEST_TMPDIR}/startup-marker"
+    HEALTHCHECK_STARTUP_FILE="${marker}" \
+        bash "${REPO_ROOT}/src/bin/startup" 2>/dev/null || true
+    [ -f "${marker}" ]
+}
+
 # ── healthcheck ───────────────────────────────────────────────────────────────
 
 @test "healthcheck: exits 0 when supercronic running and crontab correct" {

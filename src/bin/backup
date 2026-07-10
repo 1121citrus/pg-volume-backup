@@ -23,4 +23,5 @@ export AWS_SHARED_CREDENTIALS_FILE="${AWS_SHARED_CREDENTIALS_FILE:=/run/secrets/
 
 info "begin ${command}"
 pg-volume-backup
+touch "${HEALTHCHECK_SUCCESS_FILE:-/tmp/pg-volume-backup-last-success}"
 info "finish ${command}"
