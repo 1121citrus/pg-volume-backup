@@ -7,6 +7,16 @@
 
 ARG BASE_IMAGE=1121citrus/aws-backup-base:latest
 
+# ── Supercronic build stage ────────────────────────────────────────────────
+# Build supercronic from source so the final image does not inherit the base
+# image's Go stdlib scan data.
+FROM golang:1.26.5-alpine AS supercronic-builder
+
+ARG SUPERCRONIC_VERSION=v0.2.47
+
+# hadolint ignore=DL3018
+RUN GOTOOLCHAIN=go1.26.5 CGO_ENABLED=0 go install github.com/aptible/supercronic@${SUPERCRONIC_VERSION}
+
 # ── Docker CLI build stage ─────────────────────────────────────────────────
 # Build the Docker CLI from source in GOPATH mode so the final image does not
 # inherit the prebuilt binary's stale Go stdlib scan data.
@@ -80,6 +90,7 @@ RUN set -eux; \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
+COPY --from=supercronic-builder --chmod=755 /go/bin/supercronic /usr/local/bin/supercronic
 COPY --from=docker-cli-builder --chmod=755 /go/bin/docker /usr/local/bin/docker
 
 COPY --chmod=755 ./src/bin/* /usr/local/bin/

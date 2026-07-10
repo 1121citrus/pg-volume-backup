@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-07-10
+
+### Fixed
+
+- Eliminate the inherited `supercronic` Go stdlib scan finding by building the
+  binary from source in the child image
+
+### Changed
+
+- Keep the child image on the shared `aws-backup-base` runtime while replacing
+  the inherited `supercronic` binary with a source-built copy
+
 ## [1.0.9] - 2026-07-10
 
 ### Fixed

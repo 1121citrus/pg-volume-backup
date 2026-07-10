@@ -67,6 +67,8 @@ pass against every package family reported by Trivy, Grype, and Docker Scout.
 
 - Rebuilt from the current `aws-backup-base:latest` and removed child-specific
   Python overlay customizations so scanner output is easier to attribute
+- Built `supercronic` from source in the child image so the final runtime no
+  longer inherits the base image's Go stdlib scan data
 - Removed the unused Perl runtime stack from the final image
 - Removed the unused `python3-pygments` package from the final image
 - Removed `python3-setuptools` and `python3-setuptools-wheel` from the final
@@ -80,11 +82,12 @@ pass against every package family reported by Trivy, Grype, and Docker Scout.
 Current local validation after those changes shows:
 
 - Trivy: child-specific Python overlay findings were removed; remaining gating
-  results depend on the shared base digest and current ignore policy
+  results should now be limited to the shared base digest and current ignore
+  policy
 - Grype: child-specific Python overlay findings were removed; remaining
-  advisory results are inherited from shared base content and feed state
-- Docker Scout: residual findings are inherited from the shared base image
-  rather than a child-specific Python package pin
+  advisory results should now be limited to shared base content and feed state
+- Docker Scout: residual findings should now be limited to the shared base
+  image rather than child-specific Python or Go stdlib packages
 
 ### Remaining findings and why they remain
 
@@ -92,7 +95,8 @@ Current local validation after those changes shows:
 
 Any remaining scanner findings in this image are inherited from the shared base
 image, most notably the AWS CLI package shipped there. The child image no
-longer adds a separate `urllib3`/`idna` overlay of its own.
+longer adds a separate `urllib3`/`idna` overlay and now ships its own
+`supercronic` binary built from source.
 
 ### Revalidation guidance
 
