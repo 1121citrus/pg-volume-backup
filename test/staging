@@ -1,36 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# 1121citrus.build-date 2026-05-04T00:23:20Z
-# 1121citrus.build-version bb2b9a0df3a1
+# Generator: build-generate
 
 # test/staging — functional staging tests for pg-volume-backup.
-#
-# SYNOPSIS
-#   test/staging [--image IMAGE]
-#                [--bucket BUCKET]
-#                [--aws-credentials FILE]
-#                [--dryrun | --no-dryrun]
-#                [--scan | --no-scan]
-#                [--advise [ADVISEMENTS] | --no-advise]
-#                [--cache CACHE_RULES]
-#                [--skip-e2e] [--test NAME] [--help]
-#
-# OPTIONS
-#   --image IMAGE    Docker image to test (positional arg also accepted).
-#   --bucket BUCKET  S3 bucket for backup/restore tests.
-#   --aws-credentials FILE
-#                    Path to AWS credentials file.
-#   --dryrun         Pass --dryrun to the container command.
-#   --no-dryrun      Disable dryrun mode.
-#   --scan           Run Trivy CVE scan (gating). Default: on.
-#   --no-scan        Skip the Trivy scan.
-#   --advise [LIST]  Advisory scans: dive,grype,scout,coverage,all.
-#   --no-advise      Disable all advisory scans.
-#   --cache CACHE_RULES
-#                    One-run cache controls (reset=all, skip-update=trivy).
-#   --skip-e2e       Skip tests flagged as destructive/end-to-end.
-#   --test NAME      Run only the named test function.
-#   -h|--help        Print this message and exit.
 #
 
 set -euo pipefail
@@ -51,6 +23,11 @@ ALPINE_TAG=3.21
 TRIVY_CACHE_VOLUME=pg-volume-backup-staging-trivy-cache
 GRYPE_CACHE_VOLUME=pg-volume-backup-staging-grype-cache
 
+# Path (relative to repo root) to a Trivy ignorefile, if configured.
+# Empty when the project has none -- test_staging_trivy_scan() skips
+# the --ignorefile flag entirely in that case.
+TRIVYIGNORE_FILE=.trivyignore
+
 # ---------------------------------------------------------------------------
 # Defaults — overridden by environment variables, then by CLI flags.
 # ---------------------------------------------------------------------------
@@ -65,16 +42,18 @@ DOCKER_RUN_ARGS="${DOCKER_RUN_ARGS:-}"
 _SKIP_E2E=false       # --skip-e2e: omit tests marked _TEST_DESTRUCTIVE=true
 _ONLY_TEST=""         # --test NAME: run only this one test by function name
 _SCAN="${STAGING_SCAN:-true}"         # --no-scan: skip Trivy gating scan
+_ADVISE_CHURN=false     # --advise churn: code-maat revision churn (advisory)
 _ADVISE_COVERAGE=false  # --advise coverage: run kcov (advisory; never gates)
 _ADVISE_DIVE=false      # --advise dive: Dive layer analysis (advisory)
 _ADVISE_GRYPE=false     # --advise grype: Grype full-severity scan (advisory)
+_ADVISE_METRICS=false   # --advise metrics: scc code-metrics summary (advisory)
 _ADVISE_SCOUT=false     # --advise scout: Docker Scout scan (advisory)
+_ADVISE_SECURITY=false  # --advise security: graudit pattern scan (advisory)
 _ADVISE_EXPLICIT=false  # set true once --advise or --no-advise is passed
 _CACHE_RESET_TRIVY=false       # --cache reset=trivy: wipe Trivy DB volume
 _CACHE_RESET_GRYPE=false       # --cache reset=grype: wipe Grype DB volume
 _CACHE_SKIP_UPDATE_TRIVY=false  # --cache skip-update=trivy: keep existing DB
 _CACHE_SKIP_UPDATE_GRYPE=false  # --cache skip-update=grype: keep existing DB
-_TRIVY_IGNOREFILE=.trivyignore  # auto-detected; overridable via --trivy-ignorefile
 
 # ---------------------------------------------------------------------------
 # Utility functions
@@ -100,7 +79,8 @@ _set_cache_targets() {
                 ;;
             all)
                 if [[ "${mode}" == "reset" ]]; then
-                    _CACHE_RESET_TRIVY=true; _CACHE_RESET_GRYPE=true
+                    _CACHE_RESET_TRIVY=true
+                    _CACHE_RESET_GRYPE=true
                 elif [[ "${mode}" == "skip-update" ]]; then
                     _CACHE_SKIP_UPDATE_TRIVY=true
                     _CACHE_SKIP_UPDATE_GRYPE=true
@@ -148,9 +128,34 @@ _reset_cache_db() {
 # the first "set -" line), stripping the leading "# " prefix.
 # Args: none
 show_help() {
-    sed -n '/^# SYNOPSIS/,/^set -/p' "$0" \
+    local help_text
+    help_text=$(sed -n '/^# SYNOPSIS/,/^set -/p' "$0" \
         | grep '^#' \
-        | sed 's/^# \{0,1\}//'
+        | sed 's/^# \{0,1\}//' || true)
+
+    if [[ -n "${help_text}" ]]; then
+        printf '%s\n' "${help_text}"
+        return 0
+    fi
+
+    cat <<'HELP_FALLBACK'
+Usage: test/staging [options]
+
+Options:
+  --image IMAGE
+  --bucket BUCKET
+  --bucket-list LIST
+  --aws-config FILE
+  --aws-credentials FILE
+  --dryrun | --no-dryrun
+  --scan | --no-scan
+  --advise [LIST] | --advice [LIST] | --no-advise
+  --cache CACHE_RULES
+  --yes
+  --skip-e2e
+  --test NAME
+  -h, --help
+HELP_FALLBACK
 }
 
 _SKIP_COUNT=0
@@ -240,24 +245,25 @@ test_staging_trivy_scan() {
     [[ "${_CACHE_SKIP_UPDATE_TRIVY}" == "true" ]] && {
         echo "    Trivy DB update skipped (--cache skip-update=trivy)" >&2
         _extra+=(--skip-db-update --skip-java-db-update); }
-    local _trivyign_v=() _trivyign_a=()
-    if [[ -n "${_TRIVY_IGNOREFILE:-}" ]]; then
-        local _repo_dir
-        _repo_dir="$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")"
-        if [[ -f "${_repo_dir}/${_TRIVY_IGNOREFILE}" ]]; then
-            _trivyign_v+=(-v "${_repo_dir}/${_TRIVY_IGNOREFILE}:/.trivyignore:ro")
-            _trivyign_a+=(--ignorefile /.trivyignore)
-        fi
+    local _ignore_mount=()
+    if [[ -n "${TRIVYIGNORE_FILE:-}" ]]; then
+        # Mount at a path that preserves the source file's own extension --
+        # Trivy picks its ignorefile parser (plain CVE-list vs YAML) from
+        # the mounted path, not the content, so a fixed ".trivyignore"
+        # destination silently breaks YAML-formatted ignorefiles.
+        local _ignore_basename
+        _ignore_basename=$(basename "${TRIVYIGNORE_FILE}")
+        _ignore_mount=(-v "${PWD}/${TRIVYIGNORE_FILE}:/${_ignore_basename}:ro")
+        _extra+=(--ignorefile "/${_ignore_basename}")
     fi
     local result=0
     docker run --rm \
         -v "${_scan_tar}:/scan.tar:ro" \
         -v "${TRIVY_CACHE_VOLUME}:/root/.cache/trivy" \
-        "${_trivyign_v[@]}" \
+        "${_ignore_mount[@]}" \
         "${TRIVY_IMAGE}:${TRIVY_TAG}" image \
             --quiet --no-progress --exit-code 1 \
             --ignore-unfixed --severity HIGH,CRITICAL \
-            "${_trivyign_a[@]}" \
             --timeout 5m \
             "${_extra[@]}" \
             --input /scan.tar 2>&1 || result=$?
@@ -305,31 +311,16 @@ test_staging_scout_advise() {
 # test_staging_dive_advise — run a Dive image-layer analysis against the
 # staged image archive.  Skipped when _ADVISE_DIVE is not "true".  Never
 # returns non-zero (advisory only); analysis output goes to stdout for the log.
-# Inefficient-file entries smaller than DIVE_MIN_WASTED_BYTES (default 1000000)
-# are filtered from the output.
 # Args: none (uses _scan_tar, DIVE_* globals)
 test_staging_dive_advise() {
     [[ "${_ADVISE_DIVE}" == "true" ]] || {
         _skip "--no-advise dive: Dive layer analysis skipped"; return 0; }
     printf '  running Dive layer analysis on %s...\n' "${IMAGE}" >&2
-    local _min_bytes="${DIVE_MIN_WASTED_BYTES:-1000000}"
     docker run --rm \
         -v "${_scan_tar}:/scan.tar:ro" \
         "${DIVE_IMAGE}:${DIVE_TAG}" \
             --source docker-archive --ci \
-            /scan.tar 2>&1 \
-        | awk -v min_b="${_min_bytes}" '
-            /^Inefficient Files:/ { in_sec = 1; print; next }
-            in_sec && $1 ~ /^[0-9]+$/ && NF >= 3 {
-                val = $2 + 0; unit = $3
-                if (unit == "GB") bytes = val * 1000000000
-                else if (unit == "MB") bytes = val * 1000000
-                else if (unit == "kB") bytes = val * 1000
-                else bytes = val
-                if (bytes >= min_b) print
-                next
-            }
-            { print }' || true
+            /scan.tar 2>&1 || true
     echo "PASS '${FUNCNAME[0]}': Dive layer analysis complete (advisory only)"
 }
 
@@ -342,7 +333,18 @@ test_staging_coverage_advise() {
     [[ "${_ADVISE_COVERAGE}" == "true" ]] || {
         _skip "--no-coverage: coverage analysis skipped"; return 0; }
     local script_dir
-    script_dir=$(dirname "$(readlink -f "$0")")
+    # Portable absolute-path resolver (macOS BSD readlink lacks -f).
+    _portable_readlink() {
+        if command -v realpath >/dev/null 2>&1; then
+            realpath "$1"
+        elif readlink -f "$1" >/dev/null 2>&1; then
+            readlink -f "$1"
+        else
+            (cd "$(dirname "$1")" \
+                && printf '%s/%s\n' "$(pwd -P)" "$(basename "$1")")
+        fi
+    }
+    script_dir=$(dirname "$(_portable_readlink "$0")")
     printf '  running kcov coverage analysis...\n' >&2
     docker run --rm \
         --cap-add SYS_PTRACE \
@@ -351,8 +353,7 @@ test_staging_coverage_advise() {
         -w /code \
         "${BATS_KCOV_IMAGE}:${BATS_KCOV_TAG}" \
         bats-coverage \
-            test/00-coverage.bats \
-        >&2 || true
+            test/00-coverage.bats || true
     echo "PASS '${FUNCNAME[0]}': coverage analysis complete (advisory only)"
 }
 
@@ -366,7 +367,7 @@ test_staging_cron_startup() {
         -e "AWS_S3_BUCKET_NAME=test.fake-bucket-for-startup-test" \
         -e "CRON_EXPRESSION=@daily" \
         "${IMAGE}")
-    printf '  container %s started; waiting for scheduler init...\n' \
+    printf '  container %s started; waiting for scheduler init...\\n' \
         "${container_id:0:12}" >&2
 
     sleep 3
@@ -480,17 +481,20 @@ _wait_for_log_pattern() {
     return 1
 }
 
-# Short-circuit --help before sourcing hooks (works even without hooks file).
-for _arg in "$@"; do
-    if [[ "${_arg}" == "-h" || "${_arg}" == "--help" ]]; then
-        show_help; exit 0
-    fi
-done
-
 # ---------------------------------------------------------------------------
 # Repo-specific helpers and test implementations (staging-hooks.sh)
 # ---------------------------------------------------------------------------
-_hooks_file="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/staging-hooks.sh"
+# Portable absolute-path resolver (macOS BSD readlink lacks -f).
+_portable_readlink() {
+    if command -v realpath >/dev/null 2>&1; then
+        realpath "$1"
+    elif readlink -f "$1" >/dev/null 2>&1; then
+        readlink -f "$1"
+    else
+        (cd "$(dirname "$1")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$1")")
+    fi
+}
+_hooks_file="$(dirname "$(_portable_readlink "${BASH_SOURCE[0]}")")/staging-hooks.sh"
 if [[ ! -f "${_hooks_file}" ]]; then
     echo "ERROR: staging-hooks.sh not found: ${_hooks_file}" >&2
     exit 1
@@ -698,13 +702,25 @@ main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --image)
-                [[ -n "${2:-}" ]] || {
-                    echo "Option $1 requires a value" >&2; exit 1; }
+                [[ $# -ge 2 ]] || {
+                    echo "Option --image requires a value" >&2; exit 1; }
                 IMAGE="$2"; shift ;;
-            --bucket)           S3_BUCKET_NAME="$2";        shift ;;
-            --bucket-list)      BUCKET_LIST="$2";           shift ;;
-            --aws-config)       AWS_CONFIG_FILE="$2";       shift ;;
-            --aws-credentials)  AWS_CREDENTIALS_FILE="$2";  shift ;;
+            --bucket)
+                [[ $# -ge 2 ]] || {
+                    echo "Option --bucket requires a value" >&2; exit 1; }
+                S3_BUCKET_NAME="$2"; shift ;;
+            --bucket-list)
+                [[ $# -ge 2 ]] || {
+                    echo "Option --bucket-list requires a value" >&2; exit 1; }
+                BUCKET_LIST="$2"; shift ;;
+            --aws-config)
+                [[ $# -ge 2 ]] || {
+                    echo "Option --aws-config requires a value" >&2; exit 1; }
+                AWS_CONFIG_FILE="$2"; shift ;;
+            --aws-credentials)
+                [[ $# -ge 2 ]] || {
+                    echo "Option --aws-credentials requires a value" >&2; exit 1; }
+                AWS_CREDENTIALS_FILE="$2"; shift ;;
             --dryrun)           DRYRUN=true  ;;
             --no-dryrun)        DRYRUN=false ;;
             --scan)             _SCAN=true   ;;
@@ -713,32 +729,40 @@ main() {
             --advise|--advice)
                 _ADVISE_EXPLICIT=true
                 if [[ $# -gt 1 && "$2" =~ \
-                        ^(coverage|dive|grype|scout|all)(,(coverage|dive|grype|scout|all))*$ ]]; then
+                        ^(churn|coverage|dive|grype|metrics|scout|security|all)(,(churn|coverage|dive|grype|metrics|scout|security|all))*$ ]]; then
                     local _adv_list="$2"; shift
                 else
                     local _adv_list="grype,scout"
                 fi
-                _ADVISE_COVERAGE=false; _ADVISE_DIVE=false
-                _ADVISE_GRYPE=false;    _ADVISE_SCOUT=false
+                _ADVISE_CHURN=false;    _ADVISE_COVERAGE=false
+                _ADVISE_DIVE=false;     _ADVISE_GRYPE=false
+                _ADVISE_METRICS=false;  _ADVISE_SCOUT=false
+                _ADVISE_SECURITY=false
                 local _adv
                 IFS=',' read -ra _advs <<< "${_adv_list}"
                 for _adv in "${_advs[@]}"; do
                     case "${_adv}" in
+                        churn)    _ADVISE_CHURN=true ;;
                         coverage) _ADVISE_COVERAGE=true ;;
                         dive)     _ADVISE_DIVE=true ;;
                         grype)    _ADVISE_GRYPE=true ;;
+                        metrics)  _ADVISE_METRICS=true ;;
                         scout)    _ADVISE_SCOUT=true ;;
+                        security) _ADVISE_SECURITY=true ;;
                         all)
-                            _ADVISE_COVERAGE=true; _ADVISE_DIVE=true
-                            _ADVISE_GRYPE=true;    _ADVISE_SCOUT=true ;;
+                            _ADVISE_CHURN=true;    _ADVISE_COVERAGE=true
+                            _ADVISE_DIVE=true;     _ADVISE_GRYPE=true
+                            _ADVISE_METRICS=true;  _ADVISE_SCOUT=true
+                            _ADVISE_SECURITY=true ;;
                         *) echo "Unknown advisement: ${_adv}" >&2; exit 1 ;;
                     esac
                 done
                 ;;
             --no-advise)
-                _ADVISE_COVERAGE=false; _ADVISE_DIVE=false
-                _ADVISE_GRYPE=false;    _ADVISE_SCOUT=false
-                _ADVISE_EXPLICIT=true
+                _ADVISE_CHURN=false;    _ADVISE_COVERAGE=false
+                _ADVISE_DIVE=false;     _ADVISE_GRYPE=false
+                _ADVISE_METRICS=false;  _ADVISE_SCOUT=false
+                _ADVISE_SECURITY=false; _ADVISE_EXPLICIT=true
                 ;;
             --cache)
                 [[ $# -ge 2 ]] || {
@@ -748,8 +772,8 @@ main() {
             --yes)          _YES=true      ;;
             --skip-e2e)     _SKIP_E2E=true ;;
             --test)
-                [[ -n "${2:-}" ]] || {
-                    echo "Option $1 requires a value" >&2; exit 1; }
+                [[ $# -ge 2 ]] || {
+                    echo "Option --test requires a value" >&2; exit 1; }
                 _ONLY_TEST="$2"; shift ;;
             -h|--help)      show_help; exit 0 ;;
             -*)
@@ -757,11 +781,8 @@ main() {
                 echo "Run 'test/staging --help' for usage." >&2
                 exit 1 ;;
             *)
-                if [[ -z "${IMAGE}" ]]; then
-                    IMAGE="$1"
-                else
-                    echo "Unexpected argument: $1" >&2; exit 1
-                fi
+                [[ -z "${IMAGE}" ]] && IMAGE="$1" || {
+                    echo "Unexpected argument: $1" >&2; exit 1; }
                 ;;
         esac
         shift
@@ -769,13 +790,16 @@ main() {
 
     # --no-scan implies --no-advise unless --advise was given explicitly
     if [[ "${_SCAN}" == "false" && "${_ADVISE_EXPLICIT}" == "false" ]]; then
-        _ADVISE_COVERAGE=false; _ADVISE_DIVE=false
-        _ADVISE_GRYPE=false;    _ADVISE_SCOUT=false
+        _ADVISE_CHURN=false;    _ADVISE_COVERAGE=false
+        _ADVISE_DIVE=false;     _ADVISE_GRYPE=false
+        _ADVISE_METRICS=false;  _ADVISE_SCOUT=false
+        _ADVISE_SECURITY=false
     fi
 
     export IMAGE S3_BUCKET_NAME BUCKET_LIST AWS_CONFIG_FILE AWS_CREDENTIALS_FILE DRYRUN
     export _YES _SKIP_E2E _ONLY_TEST _SCAN
-    export _ADVISE_COVERAGE _ADVISE_DIVE _ADVISE_GRYPE _ADVISE_SCOUT _ADVISE_EXPLICIT
+    export _ADVISE_CHURN _ADVISE_COVERAGE _ADVISE_DIVE _ADVISE_GRYPE
+    export _ADVISE_METRICS _ADVISE_SCOUT _ADVISE_SECURITY _ADVISE_EXPLICIT
     export _CACHE_RESET_TRIVY _CACHE_RESET_GRYPE
     export _CACHE_SKIP_UPDATE_TRIVY _CACHE_SKIP_UPDATE_GRYPE DOCKER_RUN_ARGS
 
@@ -802,15 +826,19 @@ main() {
         echo "  Scan:     skipped (--no-scan)"
     fi
     local _advise_any=false
-    [[ "${_ADVISE_COVERAGE}" == "true" || "${_ADVISE_DIVE}" == "true" \
-        || "${_ADVISE_GRYPE}" == "true" || "${_ADVISE_SCOUT}" == "true" ]] \
-        && _advise_any=true
+    [[ "${_ADVISE_CHURN}"    == "true" || "${_ADVISE_COVERAGE}" == "true" \
+        || "${_ADVISE_DIVE}" == "true" || "${_ADVISE_GRYPE}"    == "true" \
+        || "${_ADVISE_METRICS}" == "true" || "${_ADVISE_SCOUT}" == "true" \
+        || "${_ADVISE_SECURITY}" == "true" ]] && _advise_any=true
     if "${_advise_any}"; then
         local _adv_items=()
+        [[ "${_ADVISE_CHURN}"    == "true" ]] && _adv_items+=(churn)
         [[ "${_ADVISE_COVERAGE}" == "true" ]] && _adv_items+=(coverage)
         [[ "${_ADVISE_DIVE}"     == "true" ]] && _adv_items+=(dive)
         [[ "${_ADVISE_GRYPE}"    == "true" ]] && _adv_items+=(grype)
+        [[ "${_ADVISE_METRICS}"  == "true" ]] && _adv_items+=(metrics)
         [[ "${_ADVISE_SCOUT}"    == "true" ]] && _adv_items+=(scout)
+        [[ "${_ADVISE_SECURITY}" == "true" ]] && _adv_items+=(security)
         local IFS=,
         echo "  Advise:   ${_adv_items[*]} (--no-advise to skip)"
     elif [[ "${_SCAN}" == "false" && "${_ADVISE_EXPLICIT}" == "false" ]]; then

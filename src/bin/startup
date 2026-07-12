@@ -48,6 +48,10 @@ export GPG_CIPHER_ALGO='$(__quote "${GPG_CIPHER_ALGO:-aes256}")'
 export GPG_PASSPHRASE='$(__quote "${GPG_PASSPHRASE:-}")'
 export GPG_PASSPHRASE_FILE='$(__quote "${GPG_PASSPHRASE_FILE:-/run/secrets/gpg-passphrase}")'
 export TZ='$(__quote "${TZ:-UTC}")'
+export HEALTHCHECK_SUCCESS_FILE='$(__quote "${HEALTHCHECK_SUCCESS_FILE:-/tmp/pg-volume-backup-last-success}")'
+export HEALTHCHECK_STARTUP_FILE='$(__quote "${HEALTHCHECK_STARTUP_FILE:-/tmp/pg-volume-backup-started-at}")'
+export HEALTHCHECK_MAX_AGE_SECONDS='$(__quote "${HEALTHCHECK_MAX_AGE_SECONDS:-172800}")'
+export HEALTHCHECK_STARTUP_GRACE_SECONDS='$(__quote "${HEALTHCHECK_STARTUP_GRACE_SECONDS:-900}")'
 EOF
 
 clean-credentials() {
@@ -57,6 +61,10 @@ info "create env file ${ENV}"
 clean-credentials < "${ENV}" | info
 # shellcheck disable=SC1090
 source "${ENV}"
+
+# Keep the healthcheck startup marker behavior behind the shared helper
+# contract so this entry point can switch to the base implementation cleanly.
+touch_healthcheck_startup_marker
 
 COMMAND="${COMMAND:-/usr/local/bin/backup}"
 info "installing cron.d entry: ${COMMAND}"

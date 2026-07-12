@@ -60,79 +60,53 @@ Report vulnerabilities through the
 
 ## Scanner status and CVE triage
 
-As of 2026-06-09, `.trivyignore` contains temporary suppressions required for
-both local staging and GitHub CI Trivy gates.
+As of 2026-07-10, the runtime image has had a focused vulnerability-reduction
+pass against every package family reported by Trivy, Grype, and Docker Scout.
 
-Current staging verification shows additional HIGH findings in AL2023 package
-streams whose Trivy fix versions are not yet available from the configured
-repositories used by the image build.
+### Remediation completed
 
-### Scout HIGH findings handled
+- Rebuilt from the current `aws-backup-base:latest` and removed child-specific
+  Python overlay customizations so scanner output is easier to attribute
+- Built `supercronic` from source in the child image so the final runtime no
+  longer inherits the base image's Go stdlib scan data
+- Removed the unused Perl runtime stack from the final image
+- Removed the unused `python3-pygments` package from the final image
+- Removed `python3-setuptools` and `python3-setuptools-wheel` from the final
+  image after validating that neither the backup workflow nor the AWS CLI
+  runtime required them
+- Relied on the shared `awscli-2` package from `aws-backup-base` for the AWS
+  CLI runtime instead of carrying a separate Python overlay in this image
 
-- Rebuilt `pg-volume-backup:latest` from the locally rebuilt
-  `aws-backup-base:latest` so `supercronic` is compiled with Go 1.26.4,
-  removing the Go stdlib HIGH finding (`CVE-2026-42504`)
-- Updated AL2023 package set in the final image so previously ignored HIGH
-  RPM findings are now fixed in-image:
-  - `glibc-2.34-231.amzn2023.0.4`
-  - `python3-libs-3.9.25-1.amzn2023.0.5`
-  - `gnutls-3.8.3-8.amzn2023.0.3`
-  - `libcap-2.73-1.amzn2023.0.7`
+### Current scanner posture
 
-### Temporary CI suppressions
+Current local validation after those changes shows:
 
-The following CVEs remain in `.trivyignore` to keep staging and CI green while
-AL2023 package publication catches up to Trivy's fixed-version metadata and the
-published base image catches up to rebuilt local content:
+- Trivy: child-specific Python overlay findings were removed; remaining gating
+  results should now be limited to the shared base digest and current ignore
+  policy
+- Grype: child-specific Python overlay findings were removed; remaining
+  advisory results should now be limited to shared base content and feed state
+- Docker Scout: residual findings should now be limited to the shared base
+  image rather than child-specific Python or Go stdlib packages
 
-- `CVE-2026-33845`
-- `CVE-2026-33846`
-- `CVE-2026-3833`
-- `CVE-2026-42009`
-- `CVE-2026-42010`
-- `CVE-2026-42014`
-- `CVE-2026-42015`
-- `CVE-2026-5260`
-- `CVE-2026-48863`
-- `CVE-2026-48864`
-- `CVE-2026-9149`
-- `CVE-2026-9150`
-- `CVE-2026-27142`
-- `CVE-2026-33811`
-- `CVE-2026-33814`
-- `CVE-2026-39820`
-- `CVE-2026-39823`
-- `CVE-2026-42499`
-- `CVE-2026-42504`
-- `CVE-2026-6472`
-- `CVE-2026-6473`
-- `CVE-2026-6474`
-- `CVE-2026-6475`
-- `CVE-2026-6477`
-- `CVE-2026-6478`
-- `CVE-2026-6479`
-- `CVE-2026-6637`
+### Remaining findings and why they remain
 
-Remove these suppressions once AL2023 publishes the corresponding fixed RPMs
-and CI consumes a refreshed `aws-backup-base:latest` with the fixed package and
-toolchain levels.
+#### Inherited scanner findings
 
-### Scout HIGH findings not currently remediable in AL2023
+Any remaining scanner findings in this image are inherited from the shared base
+image, most notably the AWS CLI package shipped there. The child image no
+longer adds a separate `urllib3`/`idna` overlay and now ships its own
+`supercronic` binary built from source.
 
-Remaining Scout and Trivy HIGHs are tied to AL2023-published package versions
-for `python3-urllib3`, `python3-setuptools`, perl subpackages, `libsolv`,
-`gnutls`, and `postgresql15` packages.
+### Revalidation guidance
 
-Current verification:
+When upstreams move, re-run these checks before changing the shared base image
+or introducing new runtime dependencies:
 
-- `dnf list --showduplicates python3-urllib3 python3-setuptools perl-interpreter`
-  shows the installed versions are already the newest available in the
-  configured AL2023 repositories
-- `dnf list --showduplicates gnutls libsolv postgresql15 postgresql15-private-libs`
-  shows the installed versions are already the newest available in the
-  configured AL2023 repositories for the image build
-- Removing `python3-urllib3` also removes `awscli-2`, which is required by the
-  backup workflow
+- `./build --cache 'reset=all'`
+- `docker scout quickview 1121citrus/pg-volume-backup:latest`
+- `docker scout cves --only-vuln-packages 1121citrus/pg-volume-backup:latest`
 
-These findings are tracked as upstream repository constraints and should be
-reassessed when newer AL2023 RPMs are published.
+If `aws-backup-base` publishes a new `supercronic` toolchain or a different AWS
+CLI packaging approach becomes available, re-test whether the child image can
+remain free of inherited Python package findings.

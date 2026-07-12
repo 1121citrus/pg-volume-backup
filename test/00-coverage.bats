@@ -159,6 +159,22 @@ teardown() {
     ! is_true 0
 }
 
+@test "common-functions: touch_healthcheck_startup_marker creates the marker" {
+    # shellcheck disable=SC1091
+    source /usr/local/include/bash/common-functions
+    local marker="${TEST_TMPDIR}/startup-marker"
+    HEALTHCHECK_STARTUP_FILE="${marker}" touch_healthcheck_startup_marker
+    [ -f "${marker}" ]
+}
+
+@test "common-functions: touch_healthcheck_startup_marker is a no-op when unset" {
+    # shellcheck disable=SC1091
+    source /usr/local/include/bash/common-functions
+    unset HEALTHCHECK_STARTUP_FILE
+    run touch_healthcheck_startup_marker
+    [ "$status" -eq 0 ]
+}
+
 # ── pg-volume-backup ──────────────────────────────────────────────────────────
 
 @test "pg-volume-backup: --help exits 0" {
@@ -333,6 +349,13 @@ teardown() {
 @test "startup: exits 0" {
     run bash "${REPO_ROOT}/src/bin/startup"
     [ "$status" -eq 0 ]
+}
+
+@test "startup: touches HEALTHCHECK_STARTUP_FILE before installing the crontab" {
+    local marker="${TEST_TMPDIR}/startup-marker"
+    HEALTHCHECK_STARTUP_FILE="${marker}" \
+        bash "${REPO_ROOT}/src/bin/startup" 2>/dev/null || true
+    [ -f "${marker}" ]
 }
 
 # ── healthcheck ───────────────────────────────────────────────────────────────
