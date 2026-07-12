@@ -94,6 +94,7 @@ COPY --from=supercronic-builder --chmod=755 /go/bin/supercronic /usr/local/bin/s
 COPY --from=docker-cli-builder --chmod=755 /go/bin/docker /usr/local/bin/docker
 
 COPY --chmod=755 ./src/bin/* /usr/local/bin/
+COPY --chmod=644 ./include/logging ./include/path /usr/local/include/
 
 USER pg-volume-backup
 
