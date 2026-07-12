@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
-# Common bash functions.
+# Common bash compatibility functions.
 # Copyright (C) 2026 James Hanlon [mailto:jim@hanlonsoftware.com]
+# SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
@@ -16,45 +17,51 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-function __log() {
-    local severity=${1:?Need severity}
-    shift
-    echo "[${severity}]" "$(date '+%Y%m%dT%H%M%S')" "$(basename "${0}")" "${@:-}" >/dev/stderr
-}
+# Resolve include root.
+# Priority:
+# 1) INCLUDE_DIR (for tests and overrides)
+# 2) /usr/local/include (runtime default)
+# 3) repo-local include/ (for host-side coverage tests via symlinked sources)
+_common_include_root="${INCLUDE_DIR:-/usr/local/include}"
 
-function log() {
-    local severity=${1:?Need severity}
-    shift
-    if [[ -n "${*:-}" ]]; then
-        __log "${severity}" "${@}"
-    else
-        while read -r line; do
-            __log "${severity}" "${line}"
-        done
+if [[ ! -r "${_common_include_root}/logging" ]] || \
+   [[ ! -r "${_common_include_root}/path" ]]; then
+    _common_this_file="${BASH_SOURCE[0]}"
+    if command -v realpath >/dev/null 2>&1; then
+        _common_this_file="$(realpath "${_common_this_file}" 2>/dev/null || echo "${_common_this_file}")"
+    elif readlink -f "${_common_this_file}" >/dev/null 2>&1; then
+        _common_this_file="$(readlink -f "${_common_this_file}" 2>/dev/null || echo "${_common_this_file}")"
     fi
-}
 
-function debug() {
-    log DEBUG "${@:-}"
-}
+    _common_repo_root="$(cd "$(dirname "${_common_this_file}")/.." >/dev/null 2>&1 && pwd)"
+    if [[ -r "${_common_repo_root}/include/logging" ]] && \
+       [[ -r "${_common_repo_root}/include/path" ]]; then
+        _common_include_root="${_common_repo_root}/include"
+    fi
+fi
 
-function error() {
-    log ERROR "${@:-}"
-    exit "${EXIT_CODE:-1}"
-}
+# shellcheck disable=SC1090
+source "${_common_include_root}/logging"
+# shellcheck disable=SC1090
+source "${_common_include_root}/path"
 
-function ignore() {
-    log IGNORE "${@:-}"
-}
-
-function info() {
-    log INFO "${@:-}"
-}
-
-function warn() {
-    log WARN "${@:-}"
-}
+# Legacy behavior compatibility: historical common-functions logged DEBUG
+# messages without requiring LOG_LEVEL to be set.
+if [[ -z "${LOG_LEVEL:-}" ]]; then
+    export LOG_LEVEL=debug
+fi
 
 function is_true() {
-    echo "${1:?Need argument}" | grep -Eiq '^\s*(1|true|t|yes|y)\s*$'
+    is-true "${1:-}"
 }
+
+function is_false() {
+    is-false "${1:-}"
+}
+
+function touch_healthcheck_startup_marker() {
+    [[ -n "${HEALTHCHECK_STARTUP_FILE:-}" ]] && touch "${HEALTHCHECK_STARTUP_FILE}"
+    return 0
+}
+
+unset _common_include_root _common_repo_root _common_this_file

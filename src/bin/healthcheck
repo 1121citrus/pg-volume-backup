@@ -1,9 +1,23 @@
 #!/usr/bin/env bash
 
-# healthcheck — verify crond is running and the crontab is configured.
+# healthcheck — verify crond is running, the crontab is configured, and a
+# backup has actually succeeded (or the container is still within its
+# post-startup grace period).
 #
 # Copyright (C) 2026 James Hanlon [mailto:jim@hanlonsoftware.com]
 # SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# ENVIRONMENT
+#   HEALTHCHECK_SUCCESS_FILE   Path to the marker `backup` touches on
+#                              success (default: /tmp/pg-volume-backup-last-success)
+#   HEALTHCHECK_MAX_AGE_SECONDS Maximum acceptable age of the success
+#                              marker in seconds (default: 172800 = 2 days)
+#   HEALTHCHECK_STARTUP_FILE  Path to the marker `startup` touches once at
+#                              container start (default: /tmp/pg-volume-backup-started-at)
+#   HEALTHCHECK_STARTUP_GRACE_SECONDS
+#                              Seconds after container start during which a
+#                              missing success marker is still healthy
+#                              (default: 900 = 15 minutes)
 
 ENV="${ENV:-${HOME:-/root}/.env}"
 # shellcheck disable=SC1090
@@ -28,4 +42,33 @@ if ! grep -qF "${COMMAND}" "${crontab_path}" 2>/dev/null; then
     exit 1
 fi
 
-exit 0
+now=$(date +%s)
+success_file="${HEALTHCHECK_SUCCESS_FILE:-/tmp/pg-volume-backup-last-success}"
+if [[ -f "${success_file}" ]]; then
+    max_age="${HEALTHCHECK_MAX_AGE_SECONDS:-172800}"
+    mtime=$(stat -c '%Y' "${success_file}")
+    age=$(( now - mtime ))
+    if [[ "${age}" -le "${max_age}" ]]; then
+        exit 0
+    fi
+    echo "healthcheck: last successful backup is ${age}s old (HEALTHCHECK_MAX_AGE_SECONDS=${max_age})" >&2
+    exit 1
+fi
+
+# No success marker yet: only healthy within the startup grace window --
+# past that, a backup that has never succeeded (not just one that hasn't
+# run yet) must report unhealthy so an operator is actually alerted.
+startup_file="${HEALTHCHECK_STARTUP_FILE:-/tmp/pg-volume-backup-started-at}"
+if [[ -f "${startup_file}" ]]; then
+    grace="${HEALTHCHECK_STARTUP_GRACE_SECONDS:-900}"
+    started_at=$(stat -c '%Y' "${startup_file}")
+    uptime=$(( now - started_at ))
+    if [[ "${uptime}" -le "${grace}" ]]; then
+        exit 0
+    fi
+    echo "healthcheck: startup grace period exceeded (${uptime}s > ${grace}s) with no successful backup" >&2
+    exit 1
+fi
+
+echo "healthcheck: backup has never succeeded and no startup marker was found" >&2
+exit 1

@@ -7,10 +7,30 @@
 
 ARG BASE_IMAGE=1121citrus/aws-backup-base:latest
 
+# ── Supercronic build stage ────────────────────────────────────────────────
+# Build supercronic from source so the final image does not inherit the base
+# image's Go stdlib scan data.
+FROM golang:1.26.5-alpine AS supercronic-builder
+
+ARG SUPERCRONIC_VERSION=v0.2.47
+
+# hadolint ignore=DL3018
+RUN GOTOOLCHAIN=go1.26.5 CGO_ENABLED=0 go install github.com/aptible/supercronic@${SUPERCRONIC_VERSION}
+
 # ── Docker CLI build stage ─────────────────────────────────────────────────
-# Extracts the statically-linked docker CLI binary from Docker's official
-# image so no third-party repository is required in the final image.
-FROM docker:cli AS docker-cli-source
+# Build the Docker CLI from source in GOPATH mode so the final image does not
+# inherit the prebuilt binary's stale Go stdlib scan data.
+FROM golang:1.26.5-alpine AS docker-cli-builder
+
+WORKDIR /tmp/gopath/src/github.com/docker/cli
+
+# hadolint ignore=DL3018
+RUN apk add --no-cache git \
+    && git clone --branch v29.6.1 --depth 1 \
+        https://github.com/docker/cli.git \
+        . \
+    && GOPATH=/tmp/gopath GO111MODULE=off CGO_ENABLED=0 \
+        /usr/local/go/bin/go build -o /go/bin/docker ./cmd/docker
 
 # ── Final image ────────────────────────────────────────────────────────────
 # hadolint ignore=DL3006
@@ -35,9 +55,6 @@ LABEL org.opencontainers.image.title="pg-volume-backup" \
       org.opencontainers.image.revision="${GIT_COMMIT}" \
       org.opencontainers.image.created="${BUILD_DATE}"
 
-# Copy the statically-linked docker CLI binary from the official docker:cli image.
-COPY --from=docker-cli-source --chmod=755 /usr/local/bin/docker /usr/local/bin/docker
-
 # Install required utilities and configure environment.
 # bzip3 and pixz are not available in AL2023; gzip, bzip2, xz, lzop, and pigz
 # cover all common backup compression scenarios.
@@ -53,6 +70,8 @@ RUN set -eux; \
         postgresql15 \
         xz \
         zip \
+    && dnf remove -y 'perl*' python3-pygments \
+    && rpm -e --nodeps python3-setuptools python3-setuptools-wheel \
     && useradd \
         --create-home --shell /sbin/nologin \
         --uid "${UID}" pg-volume-backup \
@@ -63,7 +82,7 @@ RUN set -eux; \
     && install -d -m 755 /var/spool/cron \
     && install -d -m 0755 -o pg-volume-backup /var/spool/cron/crontabs \
     && mkdir -pv /usr/local/include/bash \
-    && ln -sf /usr/local/bin/common-functions \
+    && ln -sf /usr/local/include/common-functions \
         /usr/local/include/bash/common-functions \
     && mkdir -p /usr/local/share/pg-volume-backup \
     && printf '%s\n' "${VERSION}" \
@@ -71,8 +90,11 @@ RUN set -eux; \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
+COPY --from=supercronic-builder --chmod=755 /go/bin/supercronic /usr/local/bin/supercronic
+COPY --from=docker-cli-builder --chmod=755 /go/bin/docker /usr/local/bin/docker
+
 COPY --chmod=755 ./src/bin/* /usr/local/bin/
-COPY --chmod=755 ./src/common-functions /usr/local/bin/
+COPY --chmod=644 ./include/logging ./include/path /usr/local/include/
 
 USER pg-volume-backup
 

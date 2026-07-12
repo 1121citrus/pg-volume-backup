@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.11] - 2026-07-11
+
+### Changed
+
+- `src/common-functions` now sources generator-managed includes
+  (`include/logging` and `include/path`) while preserving
+  compatibility wrappers (`is_true`, `is_false`, and
+  `touch_healthcheck_startup_marker`).
+- `Dockerfile` now copies `include/logging` and `include/path` into
+  `/usr/local/include/` so shared helper loading works in runtime
+  containers, not only host-side tests.
+
+### Added
+
+- Generator-managed `include/path` helper include to align with the
+  current citrus build-template model.
+
+## [1.0.10] - 2026-07-10
+
+### Fixed
+
+- Eliminate the inherited `supercronic` Go stdlib scan finding by building the
+  binary from source in the child image
+
+### Changed
+
+- Keep the child image on the shared `aws-backup-base` runtime while replacing
+  the inherited `supercronic` binary with a source-built copy
+
+## [1.0.9] - 2026-07-10
+
+### Fixed
+
+- Remove temporary `urllib3` Trivy suppressions that were tied to the retired
+  child-image Python overlay
+- Update `SECURITY.md` scanner posture notes to match the current base-inherited
+  finding model and release-readiness checks
+
+### Changed
+
+- Build the Docker CLI from source (`docker/cli` v29.6.1 with Go 1.26.5) in a
+  dedicated builder stage instead of copying it from the prebuilt `docker:cli`
+  image
+- Drop child-image Python package overlay logic (`python3-pip`, `idna`,
+  `urllib3`) and rely on the shared `awscli-2` runtime from `aws-backup-base`
+
 ## [1.0.8] - 2026-06-09
 
 ### Fixed
@@ -132,7 +178,10 @@ See git log for details.
 - Documentation: README, SECURITY, CONTRIBUTING, src/bin/README,
   test/README, test/TESTING
 
-[Unreleased]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.8...HEAD
+[Unreleased]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.11...HEAD
+[1.0.11]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.10...v1.0.11
+[1.0.10]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.9...v1.0.10
+[1.0.9]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.8...v1.0.9
 [1.0.8]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.7...v1.0.8
 [1.0.7]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.5...v1.0.6

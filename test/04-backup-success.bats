@@ -50,6 +50,13 @@ teardown() {
     [[ "${output}" == *"finish backup"* ]]
 }
 
+@test "a successful backup touches HEALTHCHECK_SUCCESS_FILE" {
+    run_backup -e COMPRESSION=none \
+        -e HEALTHCHECK_SUCCESS_FILE=/output/healthcheck-success-marker \
+        >/dev/null
+    [ -f "${TEST_TMPDIR}/output/healthcheck-success-marker" ]
+}
+
 # ── Archive naming ────────────────────────────────────────────────────────────
 
 @test "archive name contains volume name" {

@@ -32,6 +32,7 @@ setup() {
     script+=' > /var/spool/cron/crontabs/$(id -un)'
     script+=' && chmod 0600 /var/spool/cron/crontabs/$(id -un)'
     script+=' && { supercronic /var/spool/cron/crontabs/$(id -un) & sleep 0.5; }'
+    script+=' && touch /tmp/pg-volume-backup-started-at'
     script+=' && /usr/local/bin/healthcheck'
     run run_healthcheck "${script}" \
         --tmpfs /var/spool/cron/crontabs:uid=10001,gid=10001,mode=0700
@@ -43,5 +44,57 @@ setup() {
     script='supercronic /var/spool/cron/crontabs/$(id -un) & sleep 0.5'
     script+=' && /usr/local/bin/healthcheck'
     run run_healthcheck "${script}"
+    [ "$status" -ne 0 ]
+}
+
+# ── Success-marker tests ──────────────────────────────────────────────────────
+
+_crond_setup='mkdir -p /var/spool/cron/crontabs'
+_crond_setup+=' && printf "%s\n" "* * * * * /usr/local/bin/backup 2>&1"'
+_crond_setup+=' > /var/spool/cron/crontabs/$(id -un)'
+_crond_setup+=' && chmod 0600 /var/spool/cron/crontabs/$(id -un)'
+_crond_setup+=' && { supercronic /var/spool/cron/crontabs/$(id -un) & sleep 0.5; }'
+
+@test "healthcheck reports healthy when success file is fresh" {
+    local script="${_crond_setup}"
+    script+=' && touch /tmp/pg-volume-backup-last-success'
+    script+=' && /usr/local/bin/healthcheck'
+    run run_healthcheck "${script}" \
+        --tmpfs /var/spool/cron/crontabs:uid=10001,gid=10001,mode=0700
+    [ "$status" -eq 0 ]
+}
+
+@test "healthcheck reports unhealthy when success file is too old" {
+    local script="${_crond_setup}"
+    script+=' && touch -t 202001010000 /tmp/pg-volume-backup-last-success'
+    script+=' && /usr/local/bin/healthcheck'
+    run run_healthcheck "${script}" \
+        --tmpfs /var/spool/cron/crontabs:uid=10001,gid=10001,mode=0700
+    [ "$status" -ne 0 ]
+}
+
+@test "healthcheck reports healthy when no success file but within startup grace" {
+    local script="${_crond_setup}"
+    script+=' && touch /tmp/pg-volume-backup-started-at'
+    script+=' && /usr/local/bin/healthcheck'
+    run run_healthcheck "${script}" \
+        --tmpfs /var/spool/cron/crontabs:uid=10001,gid=10001,mode=0700
+    [ "$status" -eq 0 ]
+}
+
+@test "healthcheck reports unhealthy when no success file and no startup marker" {
+    local script="${_crond_setup}"
+    script+=' && /usr/local/bin/healthcheck'
+    run run_healthcheck "${script}" \
+        --tmpfs /var/spool/cron/crontabs:uid=10001,gid=10001,mode=0700
+    [ "$status" -ne 0 ]
+}
+
+@test "healthcheck reports unhealthy when no success file and startup grace exceeded" {
+    local script="${_crond_setup}"
+    script+=' && touch -t 202001010000 /tmp/pg-volume-backup-started-at'
+    script+=' && /usr/local/bin/healthcheck'
+    run run_healthcheck "${script}" \
+        --tmpfs /var/spool/cron/crontabs:uid=10001,gid=10001,mode=0700
     [ "$status" -ne 0 ]
 }
