@@ -45,4 +45,30 @@ CVE-2026-6478
 CVE-2026-6479
 CVE-2026-6637
 
+# glib2: multiple buffer over-read / path traversal / integer underflow
+# issues — fix: 2.82.2-770.amzn2023 (not yet in repo). Already suppressed
+# in aws-backup-base's own .trivyignore; mirrored here since suppression
+# is a scan-time parameter, not baked into the inherited base image.
+CVE-2026-58010
+CVE-2026-58011
+CVE-2026-58012
+CVE-2026-58013
+CVE-2026-58014
+CVE-2026-58015
+CVE-2026-58016
+
+# libacl: symlink traversal privilege escalation / TOCTOU — fix:
+# 2.4.0-1.amzn2023.0.1 (not yet in repo)
+CVE-2026-54369
+CVE-2026-54370
+
+# cpython (python3, python3-libs): configparser injection, tarfile
+# extractall filter bypass/DoS, unicodedata DoS, BZ2 decompression
+# out-of-bounds write — fix: 3.9.25-1.amzn2023.0.8 (not yet in repo)
+CVE-2026-0864
+CVE-2026-11940
+CVE-2026-11972
+CVE-2026-3276
+CVE-2026-9669
+
 
