@@ -98,6 +98,16 @@ image, most notably the AWS CLI package shipped there. The child image no
 longer adds a separate `urllib3`/`idna` overlay and now ships its own
 `supercronic` binary built from source.
 
+As of 2026-07-23, this includes a glib2/libacl/python3 AL2023 batch (HIGH
+severity, `CVE-2026-58010`–`CVE-2026-58016`, `CVE-2026-54369`,
+`CVE-2026-54370`, `CVE-2026-0864`, `CVE-2026-11940`, `CVE-2026-11972`,
+`CVE-2026-3276`, `CVE-2026-9669`) with no fixed package yet available in the
+AL2023 repositories. Already suppressed in `aws-backup-base`'s own
+`.trivyignore` (reviewed 2026-07-21) but not previously mirrored here, since
+`.trivyignore` suppression is a scan-time parameter and is not inherited from
+the base image. Mirrored into this repo's own `.trivyignore`; remove once
+`aws-backup-base` reports these fixed.
+
 ### Revalidation guidance
 
 When upstreams move, re-run these checks before changing the shared base image
