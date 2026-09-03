@@ -60,7 +60,7 @@ Report vulnerabilities through the
 
 ## Scanner status and CVE triage
 
-As of 2026-07-10, the runtime image has had a focused vulnerability-reduction
+As of 2026-09-03, the runtime image has had a focused vulnerability-reduction
 pass against every package family reported by Trivy, Grype, and Docker Scout.
 
 ### Remediation completed
@@ -79,15 +79,14 @@ pass against every package family reported by Trivy, Grype, and Docker Scout.
 
 ### Current scanner posture
 
-Current local validation after those changes shows:
+Current local validation against the published
+`1121citrus/aws-backup-base:1.2.1` image shows:
 
-- Trivy: child-specific Python overlay findings were removed; remaining gating
-  results should now be limited to the shared base digest and current ignore
-  policy
-- Grype: child-specific Python overlay findings were removed; remaining
-  advisory results should now be limited to shared base content and feed state
-- Docker Scout: residual findings should now be limited to the shared base
-  image rather than child-specific Python or Go stdlib packages
+- Trivy: zero findings after applying the current `.trivyignore` policy
+- Grype: residual findings are limited to package-feed and backport metadata
+  discrepancies in the shared AL2023 base
+- Docker Scout: residual findings are limited to the shared base image and
+  advisory feed differences
 
 ### Remaining findings and why they remain
 
@@ -98,22 +97,28 @@ image, most notably the AWS CLI package shipped there. The child image no
 longer adds a separate `urllib3`/`idna` overlay and now ships its own
 `supercronic` binary built from source.
 
-As of 2026-07-23, this includes a glib2/libacl/python3 AL2023 batch (HIGH
-severity, `CVE-2026-58010`–`CVE-2026-58016`, `CVE-2026-54369`,
-`CVE-2026-54370`, `CVE-2026-0864`, `CVE-2026-11940`, `CVE-2026-11972`,
-`CVE-2026-3276`, `CVE-2026-9669`) with no fixed package yet available in the
-AL2023 repositories. Already suppressed in `aws-backup-base`'s own
-`.trivyignore` (reviewed 2026-07-21) but not previously mirrored here, since
-`.trivyignore` suppression is a scan-time parameter and is not inherited from
-the base image. Mirrored into this repo's own `.trivyignore`; remove once
-`aws-backup-base` reports these fixed.
+As of 2026-09-03, the newly required Trivy suppressions are:
+
+| CVE(s) | Component | Fixed version |
+| --- | --- | --- |
+| `CVE-2026-14662`, `CVE-2026-14663`, `CVE-2026-14664`, `CVE-2026-14666`, `CVE-2026-14668`, `CVE-2026-14669`, `CVE-2026-14670`, `CVE-2026-14671`, `CVE-2026-14673`, `CVE-2026-14678`, `CVE-2026-14679`, `CVE-2026-14680`, `CVE-2026-15741`, `CVE-2026-15742`, `CVE-2026-16239`, `CVE-2026-16241`, `CVE-2026-18024`, `CVE-2026-18408`, `CVE-2026-19385`, `CVE-2026-6464`, `CVE-2026-6469`, `CVE-2026-6470`, `CVE-2026-6471` | `postgresql15` / `postgresql15-private-libs` | `15.19-1.amzn2023.0.1` |
+| `CVE-2026-14456` | `openssl-fips-provider-latest` / `openssl-libs` | `1:3.5.7-2.amzn2023.0.2` |
+
+The corresponding fixed packages were not available in the AL2023
+repositories used during the build. The suppressions are scan-time parameters
+and therefore must be maintained in this repository even when the shared base
+image has matching entries.
+
+The older gnutls, libcap, libsolv, glib2, libacl, and cpython entries remain
+in `.trivyignore` pending a separate clean-up pass against every supported
+base-image architecture.
 
 ### Revalidation guidance
 
 When upstreams move, re-run these checks before changing the shared base image
 or introducing new runtime dependencies:
 
-- `./build --cache 'reset=all'`
+- `./build --cache 'reset=all' --advise all`
 - `docker scout quickview 1121citrus/pg-volume-backup:latest`
 - `docker scout cves --only-vuln-packages 1121citrus/pg-volume-backup:latest`
 

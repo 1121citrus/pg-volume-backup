@@ -1,12 +1,10 @@
 # Trivy ignore list for pg-volume-backup.
 #
-# Temporary suppressions for CI builds that consume the published
-# `1121citrus/aws-backup-base:latest` image before a refreshed base image is
-# available in the registry. Local staging runs that build from the rebuilt
-# local base are expected to be clean without these entries.
+# Temporary suppressions for CVEs whose fixed packages are not yet available
+# in the configured AL2023 repositories.
 #
-# Re-validate and remove these entries after the refreshed base image is
-# published and downstream CI picks it up.
+# Re-validate and remove each entry after its fixed package is available and
+# adopted by the image build.
 
 # gnutls
 CVE-2026-33845
@@ -45,6 +43,37 @@ CVE-2026-6478
 CVE-2026-6479
 CVE-2026-6637
 
+# postgresql15 / postgresql15-private-libs: fixes require PostgreSQL
+# 15.19-1.amzn2023.0.1, which is not yet available in the AL2023 repositories.
+CVE-2026-14662
+CVE-2026-14663
+CVE-2026-14664
+CVE-2026-14666
+CVE-2026-14668
+CVE-2026-14669
+CVE-2026-14670
+CVE-2026-14671
+CVE-2026-14673
+CVE-2026-14678
+CVE-2026-14679
+CVE-2026-14680
+CVE-2026-15741
+CVE-2026-15742
+CVE-2026-16239
+CVE-2026-16241
+CVE-2026-18024
+CVE-2026-18408
+CVE-2026-19385
+CVE-2026-6464
+CVE-2026-6469
+CVE-2026-6470
+CVE-2026-6471
+
+# openssl-fips-provider-latest / openssl-libs: fix requires
+# 1:3.5.7-2.amzn2023.0.2, which is not yet available in the AL2023
+# repositories.
+CVE-2026-14456
+
 # glib2: multiple buffer over-read / path traversal / integer underflow
 # issues — fix: 2.82.2-770.amzn2023 (not yet in repo). Already suppressed
 # in aws-backup-base's own .trivyignore; mirrored here since suppression
@@ -70,5 +99,4 @@ CVE-2026-11940
 CVE-2026-11972
 CVE-2026-3276
 CVE-2026-9669
-
 
