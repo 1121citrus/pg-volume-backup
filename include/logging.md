@@ -17,7 +17,7 @@ source "${BWX_ROOT}/include/logging"
 Logging levels ordered by severity (lowest to highest):
 
 | Level | Integer | Description |
-|-------|---------|-------------|
+| --- | --- | --- |
 | `DIAG` | 0 | Diagnostic (most verbose) |
 | `TRACE` | 10 | Execution tracing |
 | `DEBUG` | 20 | Development troubleshooting |
@@ -34,7 +34,7 @@ The active threshold is controlled by `LOG_LEVEL` (default: `info`).
 ### Core behavior
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| --- | --- | --- |
 | `LOG_LEVEL` | `info` | Minimum severity emitted |
 | `DEFAULT_LOG_LEVEL` | `info` | Fallback when `LOG_LEVEL` is unset |
 | `LOG_DATE_FORMAT` | `%Y%m%dT%H%M%S` | Timestamp format for `date` |
@@ -45,7 +45,7 @@ The active threshold is controlled by `LOG_LEVEL` (default: `info`).
 Each log line can include optional context fields before `[LEVEL]`.
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| --- | --- | --- |
 | `LOGGING_INCLUDE_ALL` | `false` | Enable timestamp, command, and location |
 | `LOGGING_INCLUDE_TIMESTAMP` | `false` | Prefix with a timestamp |
 | `LOGGING_INCLUDE_COMMAND` | `false` | Prefix with the command name |
