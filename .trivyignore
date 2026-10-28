@@ -5,98 +5,55 @@
 #
 # Re-validate and remove each entry after its fixed package is available and
 # adopted by the image build.
+#
+# All entries below verified against a fresh Trivy/Grype/Scout scan on
+# 2026-10-28 against aws-backup-base:1.2.2 (AL2023 digest
+# sha256:c04a1012...be9b6). Confirmed via `dnf list --showduplicates <pkg>`
+# that no build matching the "Fixed Version" the scanners report exists yet
+# in the AL2023 repository mirror. These mirror the same unfixed set
+# documented in aws-backup-base's own .trivyignore/SECURITY.md; suppression
+# is a scan-time parameter, not inherited from the base image, so it must be
+# maintained here too.
+#
+# All previously-listed entries (gnutls, the old misattributed-libcap Go
+# stdlib set, supercronic Go stdlib CVE-2026-42504, libsolv,
+# postgresql15/postgresql15-private-libs, openssl-fips-provider-latest/
+# openssl-libs, glib2, libacl, the old cpython configparser/tarfile/
+# unicodedata/BZ2 set) are resolved: the AL2023 digest refresh and `dnf
+# upgrade` already pull PostgreSQL 15.19-1.amzn2023.0.1, and bumping the
+# supercronic/docker-cli builder images to golang:1.27.3-alpine (removing
+# the GOTOOLCHAIN=go1.27.1 pin that silently froze the compiled Go stdlib)
+# resolved the Go stdlib findings on both binaries. Removed accordingly.
 
-# gnutls
-CVE-2026-33845
-CVE-2026-33846
-CVE-2026-3833
-CVE-2026-42009
-CVE-2026-42010
-CVE-2026-42014
-CVE-2026-42015
-CVE-2026-5260
+# ca-certificates: Firefox website spoofing via failure to block
+# compromised intermediate certificates — fix: 2025.2.76-1.0.amzn2023.0.4
+# (not yet in repo)
+CVE-2026-113470
 
-# libcap (Go stdlib advisories in transitive metadata)
-CVE-2026-27142
-CVE-2026-33811
-CVE-2026-33814
-CVE-2026-39820
-CVE-2026-39823
-CVE-2026-42499
+# curl-minimal / libcurl-minimal / curl: HTTP/2 upload Use-After-Free —
+# fix: 8.21.0-5.amzn2023.0.3 (not yet in repo)
+CVE-2026-92392
 
-# supercronic Go stdlib
-CVE-2026-42504
+# cyrus-sasl-lib / cyrus-sasl: heap buffer overflow in add_to_challenge()
+# allows malicious server to crash client — fix: 2.1.27-18.amzn2023.0.4
+# (not yet in repo)
+CVE-2026-107161
 
-# libsolv
-CVE-2026-48863
-CVE-2026-48864
-CVE-2026-9149
-CVE-2026-9150
+# libcap: upstream Go net/http advisories misattributed by Trivy's AL2023
+# feed to this package's NVR — fix: 2.73-1.amzn2023.0.8 (not yet in repo)
+CVE-2026-78659
+CVE-2026-78667
+CVE-2026-94440
 
-# postgresql15 / postgresql15-private-libs
-CVE-2026-6472
-CVE-2026-6473
-CVE-2026-6474
-CVE-2026-6475
-CVE-2026-6477
-CVE-2026-6478
-CVE-2026-6479
-CVE-2026-6637
+# pcre2 / pcre2-syntax: out-of-bounds write/read via crafted regular
+# expressions and invalid UTF matching — fix: 10.40-1.amzn2023.0.5 (not
+# yet in repo)
+CVE-2026-103111
+CVE-2026-86145
+CVE-2026-89156
+CVE-2026-89160
 
-# postgresql15 / postgresql15-private-libs: fixes require PostgreSQL
-# 15.19-1.amzn2023.0.1, which is not yet available in the AL2023 repositories.
-CVE-2026-14662
-CVE-2026-14663
-CVE-2026-14664
-CVE-2026-14666
-CVE-2026-14668
-CVE-2026-14669
-CVE-2026-14670
-CVE-2026-14671
-CVE-2026-14673
-CVE-2026-14678
-CVE-2026-14679
-CVE-2026-14680
-CVE-2026-15741
-CVE-2026-15742
-CVE-2026-16239
-CVE-2026-16241
-CVE-2026-18024
-CVE-2026-18408
-CVE-2026-19385
-CVE-2026-6464
-CVE-2026-6469
-CVE-2026-6470
-CVE-2026-6471
-
-# openssl-fips-provider-latest / openssl-libs: fix requires
-# 1:3.5.7-2.amzn2023.0.2, which is not yet available in the AL2023
-# repositories.
-CVE-2026-14456
-
-# glib2: multiple buffer over-read / path traversal / integer underflow
-# issues — fix: 2.82.2-770.amzn2023 (not yet in repo). Already suppressed
-# in aws-backup-base's own .trivyignore; mirrored here since suppression
-# is a scan-time parameter, not baked into the inherited base image.
-CVE-2026-58010
-CVE-2026-58011
-CVE-2026-58012
-CVE-2026-58013
-CVE-2026-58014
-CVE-2026-58015
-CVE-2026-58016
-
-# libacl: symlink traversal privilege escalation / TOCTOU — fix:
-# 2.4.0-1.amzn2023.0.1 (not yet in repo)
-CVE-2026-54369
-CVE-2026-54370
-
-# cpython (python3, python3-libs): configparser injection, tarfile
-# extractall filter bypass/DoS, unicodedata DoS, BZ2 decompression
-# out-of-bounds write — fix: 3.9.25-1.amzn2023.0.8 (not yet in repo)
-CVE-2026-0864
-CVE-2026-11940
-CVE-2026-11972
-CVE-2026-3276
-CVE-2026-9669
-
+# python3 / python3-libs: certificate verification bypass via missing
+# server_hostname validation in SSLContext.wrap_bio() — fix:
+# 3.9.25-1.amzn2023.0.11 (not yet in repo)
+CVE-2026-19553

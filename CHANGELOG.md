@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Rebuilt against `aws-backup-base:1.2.2` (AL2023 digest refreshed to
+  2026-10-28), resolving every previously-suppressed `postgresql15` /
+  `postgresql15-private-libs` CVE (23 entries removed from `.trivyignore`)
+  now that `dnf upgrade` pulls PostgreSQL `15.19-1.amzn2023.0.1`.
+- Fixed a `GOTOOLCHAIN=go1.27.1` pin in the `supercronic-builder` stage that
+  silently overrode the `golang:*-alpine` builder image tag and froze the
+  compiled `supercronic` binary's embedded Go stdlib. Bumped the
+  `supercronic-builder` and `docker-cli-builder` stages to
+  `golang:1.27.3-alpine`, `SUPERCRONIC_VERSION` to `v0.2.49`, and changed the
+  pin to `GOTOOLCHAIN=local`, resolving 2 CRITICAL and 11 HIGH/MEDIUM Go
+  stdlib findings in the `docker` and `supercronic` gobinaries.
+- Added a `.grype.yaml` suppression for `urllib3` `GHSA-q2q7-5pp4-w6pg`
+  (`CVE-2021-33503`, AL2023 confirmed "Not Affected") and removed the
+  now-stale `glibc`/`python3` entries it replaces.
+- Removed `.trivyignore` entries resolved by the `aws-backup-base:1.2.2`
+  digest refresh (`gnutls`, misattributed `libcap`, `libsolv`,
+  `openssl-fips-provider-latest`/`openssl-libs`, `glib2`, `libacl`,
+  `supercronic` Go stdlib) and mirrored the base image's current unfixed set
+  (`ca-certificates`, `curl`/`curl-minimal`/`libcurl-minimal`,
+  `cyrus-sasl`/`cyrus-sasl-lib`, `libcap`, `pcre2`/`pcre2-syntax`,
+  `python3`/`python3-libs`).
+- Documented in `SECURITY.md` that Trivy's cached DB can lag Grype/Docker
+  Scout within the same `./build` run, and that `urllib3`'s `CVE-2024-37891`
+  remains an unconfirmed, undocumented finding pending ALAS verification.
+
 ## [1.0.12] - 2026-07-23
 
 ### Security

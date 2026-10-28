@@ -10,17 +10,21 @@ ARG BASE_IMAGE=1121citrus/aws-backup-base:latest
 # ── Supercronic build stage ────────────────────────────────────────────────
 # Build supercronic from source so the final image does not inherit the base
 # image's Go stdlib scan data.
-FROM golang:1.27.1-alpine AS supercronic-builder
+FROM golang:1.27.3-alpine AS supercronic-builder
 
-ARG SUPERCRONIC_VERSION=v0.2.47
+ARG SUPERCRONIC_VERSION=v0.2.49
 
+# GOTOOLCHAIN=local keeps the build on whatever Go ships in the pinned
+# builder image above; a hardcoded version here would silently override
+# the builder image tag and freeze the compiled binary on a stale Go
+# stdlib regardless of how recent the image is.
 # hadolint ignore=DL3018
-RUN GOTOOLCHAIN=go1.27.1 CGO_ENABLED=0 go install github.com/aptible/supercronic@${SUPERCRONIC_VERSION}
+RUN GOTOOLCHAIN=local CGO_ENABLED=0 go install github.com/aptible/supercronic@${SUPERCRONIC_VERSION}
 
 # ── Docker CLI build stage ─────────────────────────────────────────────────
 # Build the Docker CLI from source in GOPATH mode so the final image does not
 # inherit the prebuilt binary's stale Go stdlib scan data.
-FROM golang:1.27.1-alpine AS docker-cli-builder
+FROM golang:1.27.3-alpine AS docker-cli-builder
 
 WORKDIR /tmp/gopath/src/github.com/docker/cli
 

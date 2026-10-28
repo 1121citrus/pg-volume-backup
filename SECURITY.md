@@ -60,10 +60,11 @@ Report vulnerabilities through the
 
 ## Scanner status and CVE triage
 
-As of 2026-09-03, the runtime image has had a focused vulnerability-reduction
-pass against every package family reported by Trivy, Grype, and Docker Scout.
+As of 2026-10-28, the runtime image was rebuilt against
+`aws-backup-base:1.2.2` and re-validated against Trivy, Grype, and Docker
+Scout with freshly downloaded vulnerability databases.
 
-### Remediation completed
+### Remediation completed (2026-09-03)
 
 - Rebuilt from the current `aws-backup-base:latest` and removed child-specific
   Python overlay customizations so scanner output is easier to attribute
@@ -77,41 +78,113 @@ pass against every package family reported by Trivy, Grype, and Docker Scout.
 - Relied on the shared `awscli-2` package from `aws-backup-base` for the AWS
   CLI runtime instead of carrying a separate Python overlay in this image
 
-### Current scanner posture
+### Remediation completed (2026-10-28)
 
-Current local validation against the published
-`1121citrus/aws-backup-base:1.2.1` image shows:
+- Rebuilt against `aws-backup-base:1.2.2` (AL2023 digest refreshed to
+  2026-10-28), whose `dnf upgrade` now pulls PostgreSQL
+  `15.19-1.amzn2023.0.1` — resolving every previously-suppressed
+  `postgresql15` / `postgresql15-private-libs` CVE (23 entries removed from
+  `.trivyignore`)
+- Fixed the same `GOTOOLCHAIN` pinning defect `aws-backup-base` had already
+  fixed in its own builder: this image's `supercronic-builder` stage
+  hardcoded `GOTOOLCHAIN=go1.27.1`, which silently overrode the builder
+  image tag and froze the compiled `supercronic` binary's embedded Go
+  stdlib regardless of how recent `golang:*-alpine` was. Bumped both the
+  `supercronic-builder` and `docker-cli-builder` stages to
+  `golang:1.27.3-alpine`, bumped `SUPERCRONIC_VERSION` to `v0.2.49`, and
+  changed `GOTOOLCHAIN=go1.27.1` to `GOTOOLCHAIN=local`. This resolved 2
+  CRITICAL and 11 HIGH/MEDIUM Go stdlib findings that Grype and Docker
+  Scout attributed to both the `docker` and `supercronic` gobinaries (none
+  of which Trivy had flagged — its cached DB predated the advisories; see
+  "Scanner DB freshness" below)
+- Added a Grype suppression for `urllib3` `GHSA-q2q7-5pp4-w6pg`
+  (`CVE-2021-33503`), mirroring `aws-backup-base`'s own `.grype.yaml`: AL2023
+  confirmed "Not Affected"
+- Removed the now-stale `.grype.yaml` entries for `glibc` / `glibc-common` /
+  `glibc-minimal-langpack` (`CVE-2026-4046`) and `python3` / `python3-libs`
+  (`CVE-2026-3644`, `CVE-2026-4786`, `CVE-2026-6100`) — a fresh Grype scan no
+  longer reports any of them against the current package versions
+- Removed the now-stale `.trivyignore` entries resolved by the
+  `aws-backup-base:1.2.2` AL2023 digest refresh: `gnutls`, the
+  misattributed-`libcap` Go stdlib batch, `libsolv`,
+  `openssl-fips-provider-latest` / `openssl-libs`, `glib2`, and `libacl`
+- Removed the `supercronic` Go stdlib suppression (`CVE-2026-42504`); the
+  toolchain fix above resolves it
 
-- Trivy: zero findings after applying the current `.trivyignore` policy
-- Grype: residual findings are limited to package-feed and backport metadata
-  discrepancies in the shared AL2023 base
-- Docker Scout: residual findings are limited to the shared base image and
-  advisory feed differences
+### Scanner DB freshness
+
+Trivy's cached CVE database can lag what Grype or Docker Scout report, even
+within the same build run, because `./build` only re-downloads it when the
+cache volume is completely empty. A stale cache can make Trivy report a
+clean image that a fresh scan would not — this happened during the
+2026-10-28 remediation pass. Before relying on a Trivy "0 findings" result
+for a security decision, re-run with `./build --cache 'reset=all'` (or at
+least `--cache 'reset=trivy'`) to confirm the DB itself is current.
+
+### Current scanner posture (2026-10-28, fresh DBs, `aws-backup-base:1.2.2`)
+
+- Trivy (HIGH/CRITICAL, `--ignore-unfixed`): 0 findings, across the AL2023
+  layer and both the `docker` and `supercronic` gobinaries
+- Grype (full severity): 9 findings, all RPM packages inherited from the
+  base image with no AL2023 build available yet (same CVEs tracked in
+  `.trivyignore`; see table below)
+- Docker Scout: 31 findings across 13 packages (0 CRITICAL / 25 HIGH / 6
+  MEDIUM), all either (a) the same inherited AL2023 RPM CVEs tracked in
+  `.trivyignore`, or (b) `urllib3`/`idna` version-string feed mismatches
+  (see below). Docker Scout has no suppression file wired into `./build`,
+  so these always surface in its report regardless of triage status.
 
 ### Remaining findings and why they remain
 
-#### Inherited scanner findings
+#### Inherited AL2023 RPM findings — fix not yet in the repo mirror
 
-Any remaining scanner findings in this image are inherited from the shared base
-image, most notably the AWS CLI package shipped there. The child image no
-longer adds a separate `urllib3`/`idna` overlay and now ships its own
-`supercronic` binary built from source.
+Verified via `dnf list --showduplicates <pkg>` against the live AL2023 repo
+mirror on 2026-10-28 (the same day as `aws-backup-base`'s own digest
+refresh): no build matching the "Fixed Version" the scanners report exists
+yet. Tracked in `.trivyignore`; mirrors the identical set documented in
+`aws-backup-base`'s own `SECURITY.md`.
 
-As of 2026-09-03, the newly required Trivy suppressions are:
-
-| CVE(s) | Component | Fixed version |
+| CVE | Component(s) | Fixed version (not yet in repo) |
 | --- | --- | --- |
-| `CVE-2026-14662`, `CVE-2026-14663`, `CVE-2026-14664`, `CVE-2026-14666`, `CVE-2026-14668`, `CVE-2026-14669`, `CVE-2026-14670`, `CVE-2026-14671`, `CVE-2026-14673`, `CVE-2026-14678`, `CVE-2026-14679`, `CVE-2026-14680`, `CVE-2026-15741`, `CVE-2026-15742`, `CVE-2026-16239`, `CVE-2026-16241`, `CVE-2026-18024`, `CVE-2026-18408`, `CVE-2026-19385`, `CVE-2026-6464`, `CVE-2026-6469`, `CVE-2026-6470`, `CVE-2026-6471` | `postgresql15` / `postgresql15-private-libs` | `15.19-1.amzn2023.0.1` |
-| `CVE-2026-14456` | `openssl-fips-provider-latest` / `openssl-libs` | `1:3.5.7-2.amzn2023.0.2` |
+| `CVE-2026-113470` | `ca-certificates` | `2025.2.76-1.0.amzn2023.0.4` |
+| `CVE-2026-92392` | `curl` / `curl-minimal` / `libcurl-minimal` | `8.21.0-5.amzn2023.0.3` |
+| `CVE-2026-107161` | `cyrus-sasl` / `cyrus-sasl-lib` | `2.1.27-18.amzn2023.0.4` |
+| `CVE-2026-78659`, `CVE-2026-78667`, `CVE-2026-94440` | `libcap` | `2.73-1.amzn2023.0.8` |
+| `CVE-2026-103111`, `CVE-2026-86145`, `CVE-2026-89156`, `CVE-2026-89160` | `pcre2` / `pcre2-syntax` | `10.40-1.amzn2023.0.5` |
+| `CVE-2026-19553` | `python3` / `python3-libs` | `3.9.25-1.amzn2023.0.11` |
 
-The corresponding fixed packages were not available in the AL2023
-repositories used during the build. The suppressions are scan-time parameters
-and therefore must be maintained in this repository even when the shared base
-image has matching entries.
+#### urllib3 / idna — version-string feed mismatches (mostly false positives)
 
-The older gnutls, libcap, libsolv, glib2, libacl, and cpython entries remain
-in `.trivyignore` pending a separate clean-up pass against every supported
-base-image architecture.
+AL2023 backports security fixes into `python3-urllib3` and `python3-idna`
+without bumping the upstream PyPI version string, so Grype and Docker Scout
+read the stale `1.25.10` / `2.10` version from package metadata and flag
+CVEs the installed RPM already patches. Verified via
+`rpm -q --changelog python3-urllib3 python3-idna` against the actual
+installed packages (`python3-urllib3-1.25.10-5.amzn2023.0.9`,
+`python3-idna-2.10-3.amzn2023.0.4` — both the latest AL2023 build available
+per `dnf list --showduplicates`):
+
+| CVE | Package | Status |
+| --- | --- | --- |
+| `CVE-2026-97689` | `urllib3` | Fixed per `.amzn2023.0.9` changelog |
+| `CVE-2023-45803` | `urllib3` | Fixed per `.amzn2023.0.8` changelog |
+| `CVE-2026-44431` | `urllib3` | Fixed per `.amzn2023.0.7` changelog |
+| `CVE-2025-66418`, `CVE-2025-66471`, `CVE-2026-21441` | `urllib3` | Fixed per `.amzn2023.0.6` changelog |
+| `CVE-2025-50181` | `urllib3` | Fixed per `.amzn2023.0.5` changelog |
+| `CVE-2023-43804` | `urllib3` | Fixed in `.amzn2023.0.6` (ALAS2023-2023-454); predates the RPM's recorded changelog window |
+| `CVE-2021-33503` | `urllib3` | AL2023 confirmed "Not Affected"; suppressed in `.grype.yaml` (`GHSA-q2q7-5pp4-w6pg`) |
+| `CVE-2026-45409` | `idna` | Fixed per `.amzn2023.0.4` changelog |
+| `CVE-2024-3651` | `idna` | Fixed per `.amzn2023.0.3` changelog |
+
+**`CVE-2024-37891` (`urllib3`, MEDIUM) is the one open exception: status
+unconfirmed.** The installed `python3-urllib3-1.25.10-5.amzn2023.0.9` is
+the latest AL2023 build available (confirmed via `dnf list
+--showduplicates`), but its RPM changelog does not explicitly list a fix
+for this CVE, unlike every other entry above. It may predate the
+changelog's recorded window (as `CVE-2023-43804` does) or it may be a
+genuine gap. Not suppressed in `.grype.yaml` pending confirmation from
+Amazon Linux Security — re-check `alas.aws.amazon.com` or the RPM
+changelog when `python3-urllib3` next updates.
 
 ### Revalidation guidance
 
@@ -122,6 +195,7 @@ or introducing new runtime dependencies:
 - `docker scout quickview 1121citrus/pg-volume-backup:latest`
 - `docker scout cves --only-vuln-packages 1121citrus/pg-volume-backup:latest`
 
-If `aws-backup-base` publishes a new `supercronic` toolchain or a different AWS
-CLI packaging approach becomes available, re-test whether the child image can
-remain free of inherited Python package findings.
+If `aws-backup-base` publishes a newer AL2023 digest, or `python3-urllib3`/
+`python3-idna` receives a newer AL2023 build, re-run
+`rpm -q --changelog <pkg>` against the new package to confirm which
+suppressions (and the `CVE-2024-37891` open item above) are still needed.
