@@ -144,9 +144,18 @@ refresh): no build matching the "Fixed Version" the scanners report exists
 yet. Tracked in `.trivyignore`; mirrors the identical set documented in
 `aws-backup-base`'s own `SECURITY.md`.
 
+`CVE-2026-114406` (`ca-certificates`) surfaced separately on 2026-10-29 via
+the staging Trivy gate, after this table was first written — a newer
+eMudhra-CA-distrust advisory fixed in `2025.2.76-1.0.amzn2023.0.5`. Rebuilding
+with `--no-cache --pull` did not pick up the fix: `dnf list --showduplicates
+ca-certificates` against the live mirror still tops out at `.0.3` (checked 3
+times on 2026-10-29), confirming the fixed build has not reached this
+repository mirror yet, independent of any build cache.
+
 | CVE | Component(s) | Fixed version (not yet in repo) |
 | --- | --- | --- |
 | `CVE-2026-113470` | `ca-certificates` | `2025.2.76-1.0.amzn2023.0.4` |
+| `CVE-2026-114406` | `ca-certificates` | `2025.2.76-1.0.amzn2023.0.5` |
 | `CVE-2026-92392` | `curl` / `curl-minimal` / `libcurl-minimal` | `8.21.0-5.amzn2023.0.3` |
 | `CVE-2026-107161` | `cyrus-sasl` / `cyrus-sasl-lib` | `2.1.27-18.amzn2023.0.4` |
 | `CVE-2026-78659`, `CVE-2026-78667`, `CVE-2026-94440` | `libcap` | `2.73-1.amzn2023.0.8` |

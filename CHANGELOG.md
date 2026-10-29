@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documented in `SECURITY.md` that Trivy's cached DB can lag Grype/Docker
   Scout within the same `./build` run, and that `urllib3`'s `CVE-2024-37891`
   remains an unconfirmed, undocumented finding pending ALAS verification.
+- Added `.trivyignore`/`SECURITY.md` coverage for `CVE-2026-114406`
+  (`ca-certificates`, HIGH), surfaced by the staging Trivy gate on
+  2026-10-29. Fix version `2025.2.76-1.0.amzn2023.0.5` is not yet present
+  in the AL2023 repository mirror (confirmed via three separate
+  `dnf list --showduplicates` checks, including a `--no-cache --pull`
+  rebuild), so this is a repo-mirror lag, not a stale build cache.
 
 ## [1.0.12] - 2026-07-23
 

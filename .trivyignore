@@ -30,6 +30,12 @@
 # (not yet in repo)
 CVE-2026-113470
 
+# ca-certificates: distrust eMudhra intermediate CA certificates — fix:
+# 2025.2.76-1.0.amzn2023.0.5 (not yet in repo mirror as of 2026-10-29;
+# `dnf list --showduplicates ca-certificates` against the live AL2023
+# mirror tops out at .0.3, confirmed across 3 separate pulls)
+CVE-2026-114406
+
 # curl-minimal / libcurl-minimal / curl: HTTP/2 upload Use-After-Free —
 # fix: 8.21.0-5.amzn2023.0.3 (not yet in repo)
 CVE-2026-92392
