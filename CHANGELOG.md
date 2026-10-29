@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.13] - 2026-10-29
+
 ### Security
 
 - Rebuilt against `aws-backup-base:1.2.2` (AL2023 digest refreshed to
@@ -224,7 +226,9 @@ See git log for details.
 - Documentation: README, SECURITY, CONTRIBUTING, src/bin/README,
   test/README, test/TESTING
 
-[Unreleased]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.11...HEAD
+[Unreleased]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.13...HEAD
+[1.0.13]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.12...v1.0.13
+[1.0.12]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.11...v1.0.12
 [1.0.11]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.10...v1.0.11
 [1.0.10]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.9...v1.0.10
 [1.0.9]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.8...v1.0.9
