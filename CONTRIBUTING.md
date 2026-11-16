@@ -51,8 +51,21 @@ The `./build` stage runs these automatically.
 4. Submit a pull request to the `dev` branch to exercise CI
 5. After `dev` is validated, submit a pull request from `dev` to `staging`
 
+## Protected branches and tags
+
+`main` cannot be force-pushed or deleted. The required GitHub Actions checks
+are listed in **Settings > Rules > Rulesets > Require main checks**. Missing
+or failed checks block updates; GitHub also accepts skipped and neutral
+results. The repository owner is the only actor allowed to create, update,
+or delete `v*` tags.
+
+Inspect and fix failed Actions runs before retrying. If a check is missing,
+verify that its workflow runs on the source branch. After renaming a check,
+verify the new name on a branch and update the ruleset before promoting that
+change to `main`.
+
 ## Release process
 
-Releases are managed by
-[release-please](https://github.com/googleapis/release-please).
-Merge the release PR to tag and publish.
+After the release commit passes the required checks and the release is
+approved, the repository owner creates and pushes its `v*` tag. The tag
+triggers the image release workflow.
