@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.14] - 2026-11-16
+
 ### Security
 
 - Added `--releasever=latest` to the image's `dnf upgrade` and
@@ -252,7 +254,8 @@ See git log for details.
 - Documentation: README, SECURITY, CONTRIBUTING, src/bin/README,
   test/README, test/TESTING
 
-[Unreleased]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.13...HEAD
+[Unreleased]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.14...HEAD
+[1.0.14]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.13...v1.0.14
 [1.0.13]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.12...v1.0.13
 [1.0.12]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.11...v1.0.12
 [1.0.11]: https://github.com/1121citrus/pg-volume-backup/compare/v1.0.10...v1.0.11
