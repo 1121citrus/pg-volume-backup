@@ -3,63 +3,15 @@
 # Temporary suppressions for CVEs whose fixed packages are not yet available
 # in the configured AL2023 repositories.
 #
-# Re-validate and remove each entry after its fixed package is available and
-# adopted by the image build.
+# 2026-11-15: no suppressions needed. The Dockerfile now runs
+# `dnf upgrade --releasever=latest`, which reaches every fixed AL2023 RPM
+# regardless of the release the base image was cut from. An unfiltered
+# Trivy scan (no ignore file, all severities, including unfixed) reports
+# zero findings. All 13 previous entries (ca-certificates, curl-minimal/
+# libcurl-minimal, cyrus-sasl-lib, libcap, pcre2/pcre2-syntax,
+# python3/python3-libs) are fixed in the installed RPMs and were removed.
 #
-# All entries below verified against a fresh Trivy/Grype/Scout scan on
-# 2026-10-28 against aws-backup-base:1.2.2 (AL2023 digest
-# sha256:c04a1012...be9b6). Confirmed via `dnf list --showduplicates <pkg>`
-# that no build matching the "Fixed Version" the scanners report exists yet
-# in the AL2023 repository mirror. These mirror the same unfixed set
-# documented in aws-backup-base's own .trivyignore/SECURITY.md; suppression
-# is a scan-time parameter, not inherited from the base image, so it must be
-# maintained here too.
-#
-# All previously-listed entries (gnutls, the old misattributed-libcap Go
-# stdlib set, supercronic Go stdlib CVE-2026-42504, libsolv,
-# postgresql15/postgresql15-private-libs, openssl-fips-provider-latest/
-# openssl-libs, glib2, libacl, the old cpython configparser/tarfile/
-# unicodedata/BZ2 set) are resolved: the AL2023 digest refresh and `dnf
-# upgrade` already pull PostgreSQL 15.19-1.amzn2023.0.1, and bumping the
-# supercronic/docker-cli builder images to golang:1.27.3-alpine (removing
-# the GOTOOLCHAIN=go1.27.1 pin that silently froze the compiled Go stdlib)
-# resolved the Go stdlib findings on both binaries. Removed accordingly.
-
-# ca-certificates: Firefox website spoofing via failure to block
-# compromised intermediate certificates — fix: 2025.2.76-1.0.amzn2023.0.4
-# (not yet in repo)
-CVE-2026-113470
-
-# ca-certificates: distrust eMudhra intermediate CA certificates — fix:
-# 2025.2.76-1.0.amzn2023.0.5 (not yet in repo mirror as of 2026-10-29;
-# `dnf list --showduplicates ca-certificates` against the live AL2023
-# mirror tops out at .0.3, confirmed across 3 separate pulls)
-CVE-2026-114406
-
-# curl-minimal / libcurl-minimal / curl: HTTP/2 upload Use-After-Free —
-# fix: 8.21.0-5.amzn2023.0.3 (not yet in repo)
-CVE-2026-92392
-
-# cyrus-sasl-lib / cyrus-sasl: heap buffer overflow in add_to_challenge()
-# allows malicious server to crash client — fix: 2.1.27-18.amzn2023.0.4
-# (not yet in repo)
-CVE-2026-107161
-
-# libcap: upstream Go net/http advisories misattributed by Trivy's AL2023
-# feed to this package's NVR — fix: 2.73-1.amzn2023.0.8 (not yet in repo)
-CVE-2026-78659
-CVE-2026-78667
-CVE-2026-94440
-
-# pcre2 / pcre2-syntax: out-of-bounds write/read via crafted regular
-# expressions and invalid UTF matching — fix: 10.40-1.amzn2023.0.5 (not
-# yet in repo)
-CVE-2026-103111
-CVE-2026-86145
-CVE-2026-89156
-CVE-2026-89160
-
-# python3 / python3-libs: certificate verification bypass via missing
-# server_hostname validation in SSLContext.wrap_bio() — fix:
-# 3.9.25-1.amzn2023.0.11 (not yet in repo)
-CVE-2026-19553
+# Suppression is a scan-time parameter, not inherited from the base image.
+# Add new entries only after confirming with
+# `dnf --releasever=latest list --showduplicates <pkg>` that no fixed build
+# exists. Give each entry a dated justification comment.

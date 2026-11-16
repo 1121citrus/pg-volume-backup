@@ -5,12 +5,15 @@
 # Copyright (C) 2026 James Hanlon [mailto:jim@hanlonsoftware.com]
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-ARG BASE_IMAGE=1121citrus/aws-backup-base:latest
+# aws-backup-base 1.2.3 (AL2023 2023.12.20261112, supercronic v0.2.49 built
+# with Go 1.27.4), pinned by multi-arch index digest so a new base image
+# cannot change what a given commit builds.
+ARG BASE_IMAGE=1121citrus/aws-backup-base@sha256:dc4c176e47b9d1b818c149466bcb61ed2e5ea643a0d947d6b8fc8519b2b14852
 
 # ── Supercronic build stage ────────────────────────────────────────────────
 # Build supercronic from source so the final image does not inherit the base
 # image's Go stdlib scan data.
-FROM golang:1.27.3-alpine AS supercronic-builder
+FROM golang:1.27.4-alpine AS supercronic-builder
 
 ARG SUPERCRONIC_VERSION=v0.2.49
 
@@ -24,7 +27,7 @@ RUN GOTOOLCHAIN=local CGO_ENABLED=0 go install github.com/aptible/supercronic@${
 # ── Docker CLI build stage ─────────────────────────────────────────────────
 # Build the Docker CLI from source in GOPATH mode so the final image does not
 # inherit the prebuilt binary's stale Go stdlib scan data.
-FROM golang:1.27.3-alpine AS docker-cli-builder
+FROM golang:1.27.4-alpine AS docker-cli-builder
 
 WORKDIR /tmp/gopath/src/github.com/docker/cli
 
@@ -62,10 +65,14 @@ LABEL org.opencontainers.image.title="pg-volume-backup" \
 # Install required utilities and configure environment.
 # bzip3 and pixz are not available in AL2023; gzip, bzip2, xz, lzop, and pigz
 # cover all common backup compression scenarios.
+# --releasever=latest: AL2023 locks dnf to the release of the image this
+# builds on, so a plain `dnf upgrade` cannot reach security fixes published
+# after aws-backup-base was last pushed. This keeps the image patched
+# without waiting for (or pushing) a new base image.
 # hadolint ignore=DL3041
 RUN set -eux; \
-    dnf upgrade -y --quiet \
-    && dnf install -y --quiet \
+    dnf upgrade -y --quiet --releasever=latest \
+    && dnf install -y --quiet --releasever=latest \
         bzip2 \
         gnupg2 \
         gzip \

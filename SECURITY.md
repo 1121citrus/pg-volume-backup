@@ -60,23 +60,32 @@ Report vulnerabilities through the
 
 ## Scanner status and CVE triage
 
-As of 2026-10-28, the runtime image was rebuilt against
-`aws-backup-base:1.2.2` and re-validated against Trivy, Grype, and Docker
-Scout with freshly downloaded vulnerability databases.
+As of 2026-11-15, the runtime image was re-validated against Trivy, Grype,
+and Docker Scout with freshly downloaded vulnerability databases, still
+built on `aws-backup-base` 1.2.3 (pinned by digest) and upgraded in place with
+`dnf upgrade --releasever=latest`.
 
-### Remediation completed (2026-09-03)
+### Remediation completed (2026-11-15)
 
-- Rebuilt from the current `aws-backup-base:latest` and removed child-specific
-  Python overlay customizations so scanner output is easier to attribute
-- Built `supercronic` from source in the child image so the final runtime no
-  longer inherits the base image's Go stdlib scan data
-- Removed the unused Perl runtime stack from the final image
-- Removed the unused `python3-pygments` package from the final image
-- Removed `python3-setuptools` and `python3-setuptools-wheel` from the final
-  image after validating that neither the backup workflow nor the AWS CLI
-  runtime required them
-- Relied on the shared `awscli-2` package from `aws-backup-base` for the AWS
-  CLI runtime instead of carrying a separate Python overlay in this image
+- Added `--releasever=latest` to this image's own `dnf upgrade` and
+  `dnf install`. AL2023 locks `dnf` to the release of the image it runs
+  in, so the plain `dnf upgrade` could not reach fixes published after
+  `aws-backup-base:latest` was pushed. The flag lets this image reach
+  green on its own without waiting for (or pushing) a new base image.
+  This resolved all 39 gating Trivy HIGH findings: `glibc` /
+  `glibc-common` / `glibc-minimal-langpack` (`CVE-2026-86805`), the
+  `rpm` family and `python3-rpm` (`CVE-2026-103242`, `CVE-2026-84837`,
+  `CVE-2026-95519`, `CVE-2026-95520`, `CVE-2026-95521`), and
+  `sqlite-libs` (`CVE-2026-119371`, `CVE-2026-119372`,
+  `CVE-2026-119373`, `CVE-2026-119375`, `CVE-2026-119376`,
+  `CVE-2026-119378`)
+- Removed all 13 `.trivyignore` entries (`ca-certificates`,
+  `curl-minimal`, `cyrus-sasl-lib`, `libcap`, `pcre2`, `python3`): the
+  fixed RPMs are now installed, and an unfiltered Trivy scan (no ignore
+  file, all severities, including unfixed) reports zero findings
+- Bumped the `supercronic-builder` and `docker-cli-builder` stages to
+  `golang:1.27.4-alpine`, resolving the Go `stdlib` advisory fixed in
+  Go 1.27.4 (Docker Scout `CVE-2026-97054`) in both gobinaries
 
 ### Remediation completed (2026-10-28)
 
@@ -121,46 +130,25 @@ clean image that a fresh scan would not — this happened during the
 for a security decision, re-run with `./build --cache 'reset=all'` (or at
 least `--cache 'reset=trivy'`) to confirm the DB itself is current.
 
-### Current scanner posture (2026-10-28, fresh DBs, `aws-backup-base:1.2.2`)
+### Current scanner posture (2026-11-15, fresh DBs)
 
 - Trivy (HIGH/CRITICAL, `--ignore-unfixed`): 0 findings, across the AL2023
-  layer and both the `docker` and `supercronic` gobinaries
-- Grype (full severity): 9 findings, all RPM packages inherited from the
-  base image with no AL2023 build available yet (same CVEs tracked in
-  `.trivyignore`; see table below)
-- Docker Scout: 31 findings across 13 packages (0 CRITICAL / 25 HIGH / 6
-  MEDIUM), all either (a) the same inherited AL2023 RPM CVEs tracked in
-  `.trivyignore`, or (b) `urllib3`/`idna` version-string feed mismatches
-  (see below). Docker Scout has no suppression file wired into `./build`,
-  so these always surface in its report regardless of triage status.
+  layer and both the `docker` and `supercronic` gobinaries. An unfiltered
+  Trivy scan (all severities, including unfixed, no `.trivyignore`) is
+  also clean
+- Grype (full severity): 0 findings
+- Docker Scout: 14 findings across 4 packages (0 CRITICAL / 7 HIGH / 6
+  MEDIUM / 1 unspecified), all false positives or unreachable (see
+  below). Docker Scout has no suppression file wired into `./build`, so
+  these always surface in its report regardless of triage status
 
 ### Remaining findings and why they remain
 
-#### Inherited AL2023 RPM findings — fix not yet in the repo mirror
+#### Docker Scout only — not fixable in this repository
 
-Verified via `dnf list --showduplicates <pkg>` against the live AL2023 repo
-mirror on 2026-10-28 (the same day as `aws-backup-base`'s own digest
-refresh): no build matching the "Fixed Version" the scanners report exists
-yet. Tracked in `.trivyignore`; mirrors the identical set documented in
-`aws-backup-base`'s own `SECURITY.md`.
-
-`CVE-2026-114406` (`ca-certificates`) surfaced separately on 2026-10-29 via
-the staging Trivy gate, after this table was first written — a newer
-eMudhra-CA-distrust advisory fixed in `2025.2.76-1.0.amzn2023.0.5`. Rebuilding
-with `--no-cache --pull` did not pick up the fix: `dnf list --showduplicates
-ca-certificates` against the live mirror still tops out at `.0.3` (checked 3
-times on 2026-10-29), confirming the fixed build has not reached this
-repository mirror yet, independent of any build cache.
-
-| CVE | Component(s) | Fixed version (not yet in repo) |
+| CVE | Package | Why it remains |
 | --- | --- | --- |
-| `CVE-2026-113470` | `ca-certificates` | `2025.2.76-1.0.amzn2023.0.4` |
-| `CVE-2026-114406` | `ca-certificates` | `2025.2.76-1.0.amzn2023.0.5` |
-| `CVE-2026-92392` | `curl` / `curl-minimal` / `libcurl-minimal` | `8.21.0-5.amzn2023.0.3` |
-| `CVE-2026-107161` | `cyrus-sasl` / `cyrus-sasl-lib` | `2.1.27-18.amzn2023.0.4` |
-| `CVE-2026-78659`, `CVE-2026-78667`, `CVE-2026-94440` | `libcap` | `2.73-1.amzn2023.0.8` |
-| `CVE-2026-103111`, `CVE-2026-86145`, `CVE-2026-89156`, `CVE-2026-89160` | `pcre2` / `pcre2-syntax` | `10.40-1.amzn2023.0.5` |
-| `CVE-2026-19553` | `python3` / `python3-libs` | `3.9.25-1.amzn2023.0.11` |
+| `CVE-2026-19617` (MEDIUM) | `lvm2` / `device-mapper-libs` | False positive. Scout compares the `device-mapper-libs` version (`1.02.185-1.amzn2023.0.6`) against the `lvm2` source package version. The installed RPM is built from `lvm2-2.03.16-1.amzn2023.0.6.src.rpm`, which is the fixed version Scout names |
 
 #### urllib3 / idna — version-string feed mismatches (mostly false positives)
 
