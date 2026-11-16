@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Added `--releasever=latest` to the image's `dnf upgrade` and
+  `dnf install`. AL2023 locks `dnf` to the base image's release, so the
+  image could not reach the fixed `glibc`, `rpm`/`python3-rpm`, and
+  `sqlite-libs` builds. This resolves all 39 gating Trivy HIGH findings
+  (CVE-2026-86805, CVE-2026-103242, CVE-2026-84837, CVE-2026-95519,
+  CVE-2026-95520, CVE-2026-95521, CVE-2026-119371, CVE-2026-119372,
+  CVE-2026-119373, CVE-2026-119375, CVE-2026-119376, CVE-2026-119378)
+  without requiring a new `aws-backup-base` image.
+- Removed all 13 `.trivyignore` entries; the fixed RPMs are now
+  installed and an unfiltered Trivy scan reports zero findings.
+- Bumped the `supercronic-builder` and `docker-cli-builder` stages to
+  `golang:1.27.4-alpine`, resolving the Go `stdlib` advisory fixed in
+  Go 1.27.4 (Docker Scout CVE-2026-97054).
+- Added static Dockerfile tests for the `--releasever=latest` flag and
+  the Go builder version.
+- Updated `SECURITY.md` with the current scanner posture and the
+  remaining Docker Scout-only finding (an `lvm2` version-scheme false
+  positive).
+- Pinned the base image to `aws-backup-base` 1.2.3 by multi-arch index
+  digest (`sha256:dc4c176e...b2b14852`) instead of `:latest`, so publishing
+  a new base image cannot change what a commit builds. 1.2.3 carries Go
+  1.27.4 `supercronic`, clearing the Docker Scout-only CVE-2026-97054
+  finding from the overwritten base layer. A static test enforces the pin.
+
 ## [1.0.13] - 2026-10-29
 
 ### Security
